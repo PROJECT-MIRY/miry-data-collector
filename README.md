@@ -1,7 +1,11 @@
-# ft-shadow-data-plane
+# miry-data-collector
 
 Binance USD-M 正式数据采集与重建流水线。v0.3.10 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
+
+仓库、Python distribution、OCI image 和后续 release artifact 统一使用
+`miry-data-collector`。为保持现有生产部署与历史数据合同稳定，Python import
+`ft_shadow_data_plane`、`ft-data-*` CLI、systemd unit 和运行目录名称不变。
 
 ```text
 Binance -> Vultr collector -> Parquet/Zstd ready/

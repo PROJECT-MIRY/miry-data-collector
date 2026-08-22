@@ -79,7 +79,7 @@ queue 为 64MiB，并且 `public_symbol_load_weights` 恰好覆盖当前 60 币�
 在 `/etc/ft-shadow-data-plane/edge.env` 中写 immutable digest：
 
 ```text
-EDGE_IMAGE=ghcr.io/50829/ft-shadow-data-plane@sha256:<release-digest>
+EDGE_IMAGE=ghcr.io/50829/miry-data-collector@sha256:<release-digest>
 EDGE_DATA_ROOT=/srv/ft-data-rsync
 EDGE_CONFIG=/etc/ft-shadow-data-plane/edge.yaml
 ```

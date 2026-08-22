@@ -4,7 +4,7 @@
 只能提交到 Slurm。固定目录为：
 
 ```text
-/home/scc/pb24000367/Projects/bn/ft-shadow-data-plane  仓库 checkout
+/home/scc/pb24000367/Projects/bn/miry-data-collector  仓库 checkout
 /home/scc/pb24000367/Projects/bn/runtime               程序、sandbox、日志、rsync 暂存
 /home/scc/pb24000367/Projects/bn/data/raw              永久原始数据
 /home/scc/pb24000367/Projects/bn/data/derived          Slurm 派生数据
@@ -23,7 +23,7 @@ module -t avail 2>&1 | grep apptainer
 command -v crontab flock sbatch ssh
 ```
 
-新装时使用 v0.3.8 的仓库目录、`ft-shadow-data-plane.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
+新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/ft-data-puller` 私钥。
 
 v0.3.8 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw 保持原始字节和日期分区，
@@ -79,13 +79,13 @@ mkdir -p "$BASE/data/derived"
 ## 3. 校验并安装 v0.3.8
 
 ```bash
-cd /home/scc/pb24000367/Projects/bn/ft-shadow-data-plane
-sha256sum --check ft-shadow-data-plane.sif.sha256
+cd /home/scc/pb24000367/Projects/bn/miry-data-collector
+sha256sum --check miry-data-collector.sif.sha256
 
 FT_CAMPUS_ROOT=/home/scc/pb24000367/Projects/bn/runtime \
 FT_DATA_ROOT=/home/scc/pb24000367/Projects/bn/data \
 FT_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
-  ./deploy/campus-107/install.sh ./ft-shadow-data-plane.sif
+  ./deploy/campus-107/install.sh ./miry-data-collector.sif
 ```
 
 安装器创建 hash-named SIF 和 sandbox，并令
@@ -97,13 +97,13 @@ FT_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
 
 ```bash
 BASE=/home/scc/pb24000367/Projects/bn
-cd "$BASE/ft-shadow-data-plane"
-sha256sum --check ft-shadow-data-plane.sif.sha256
+cd "$BASE/miry-data-collector"
+sha256sum --check miry-data-collector.sif.sha256
 
 FT_CAMPUS_ROOT="$BASE/runtime" \
 FT_DATA_ROOT="$BASE/data" \
 FT_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
-  ./deploy/campus-107/install.sh ./ft-shadow-data-plane.sif
+  ./deploy/campus-107/install.sh ./miry-data-collector.sif
 
 FT_CAMPUS_ROOT="$BASE/runtime" \
   "$BASE/runtime/deploy/campus-107/verify.sh"

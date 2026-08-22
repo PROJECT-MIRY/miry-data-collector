@@ -2,7 +2,7 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 /path/to/ft-shadow-data-plane.sif" >&2
+    echo "usage: $0 /path/to/miry-data-collector.sif" >&2
     exit 2
 fi
 

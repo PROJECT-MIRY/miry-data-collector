@@ -24,24 +24,24 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/50829/ft-shadow-data-plane:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           provenance: false
           sbom: false
       - uses: eWaterCycle/setup-apptainer@v2
         with:
           apptainer-version: 1.4.2
-      - run: apptainer build ft-shadow-data-plane.sif docker://ghcr.io/50829/ft-shadow-data-plane@${{ steps.image.outputs.digest }}
+      - run: apptainer build miry-data-collector.sif docker://ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
       - name: Prepare deployment artifacts
         run: |
-          sha256sum ft-shadow-data-plane.sif > ft-shadow-data-plane.sif.sha256
+          sha256sum miry-data-collector.sif > miry-data-collector.sif.sha256
           printf '%s\n' \
-            'ghcr.io/50829/ft-shadow-data-plane@${{ steps.image.outputs.digest }}' \
+            'ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}' \
             > edge-image.txt
       - env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${GITHUB_REF_NAME}"
-          ft-shadow-data-plane.sif
-          ft-shadow-data-plane.sif.sha256
+          miry-data-collector.sif
+          miry-data-collector.sif.sha256
           edge-image.txt
           --generate-notes

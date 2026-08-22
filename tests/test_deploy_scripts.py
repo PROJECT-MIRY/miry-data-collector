@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,18 @@ def _load_rsync_gateway():
 
 
 RSYNC_GATEWAY_MODULE = _load_rsync_gateway()
+
+
+def test_project_and_release_identity_use_miry_name() -> None:
+    project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="ascii"))
+    readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
+    release = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="ascii")
+
+    assert project["project"]["name"] == "miry-data-collector"
+    assert readme.startswith("# miry-data-collector\n")
+    assert "ghcr.io/${{ github.repository }}" in release
+    assert "miry-data-collector.sif" in release
+    assert "ft-shadow-data-plane.sif" not in release
 
 
 def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:

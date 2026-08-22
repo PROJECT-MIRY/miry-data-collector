@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "ft-shadow-data-plane"
+name = "miry-data-collector"
 version = "0.3.10"
 description = "Loss-explicit Binance USD-M market data collection and reconstruction"
 readme = "README.md"

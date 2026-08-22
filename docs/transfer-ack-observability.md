@@ -7,6 +7,11 @@ ACK 是删除 Vultr `ready/` 副本的授权，不是普通进度提示。端到
 3. `ACK_VALIDATED`：Vultr 确认 ACK 的 `chunk_id` 和 SHA-256 与 ready manifest 一致；
 4. `REMOTE_GC`：Vultr 删除 ready 数据副本并持久化审计事件。
 
+107 与 Vultr 的目录同步和 GC 可以并发：107 可能在 GC 前列出 ready，随后对本地已持久化的同一
+chunk 重发 ACK。Vultr 在未封日保留 acked manifest 墓碑；完全相同的 ACK 记录为
+`ACK_REPLAYED`，`acks_replayed` 加一，不重复计算 GC，也不进入 rejected。相同 chunk ID 但不同
+SHA-256 仍是 `ACK_HASH_MISMATCH`。
+
 只有 `REMOTE_GC` 表示一个 chunk 完成闭环。`pull complete` 证明本轮 107 阶段成功，但 Vultr
 可能要到下一个 5 秒 storage 周期才应用 ACK。
 
@@ -40,7 +45,7 @@ SHA-256 和批次 ID；重启恢复可能重复写同一个确定性 `event_id`�
 `REMOTE_GC` 才删除 transaction。若进程在中间退出，新进程启动时先恢复 transaction，再执行
 日 seal 和采集启动。
 
-单个损坏 ACK、文件名不匹配、未知 chunk 或 hash mismatch 不再终止 collector，也不会删除 ready。
+单个损坏 ACK、文件名不匹配、真正未知的 chunk 或 hash mismatch 不再终止 collector，也不会删除 ready。
 它们被原子移动到 `rejected-acks`，状态变为 `attention` 并写结构化错误事件。损坏 ready manifest
 同样不会让 storage task 崩溃；对应数据保持在 spool，等待人工处理，磁盘保护线仍然生效。
 
@@ -65,7 +70,8 @@ sudo find /srv/ft-data-rsync/control/rejected-acks -type f -maxdepth 1 -print
 ```
 
 正常状态要求 107 `state=ok`、`acks_pushed` 等于 `acks_queued`、Vultr
-`state=ok`、`hash_mismatches=0`、`invalid_acks=0`、`transactions_pending=0`，并且 ready backlog
+`state=ok`、`hash_mismatches=0`、`invalid_acks=0`、`unknown_acks=0`、`transactions_pending=0`，
+并且 ready backlog
 持续收敛。两端批次时间不同，瞬时计数不要求相等。
 
 以下任一条件需要处理：5 分钟没有成功 pull；10 分钟内 ready 文件和字节只增不减；任何

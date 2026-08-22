@@ -51,6 +51,7 @@ class SpoolStatus:
 class AckApplyResult:
     seen: int = 0
     applied: int = 0
+    replayed: int = 0
     gc_bytes: int = 0
     invalid: int = 0
     hash_mismatches: int = 0
@@ -104,6 +105,7 @@ class SpoolManager:
         invalid = 0
         mismatches = 0
         unknown = 0
+        replayed = 0
         for ack_path in ack_paths:
             try:
                 ack = ACK_ADAPTER.validate_json(ack_path.read_bytes())
@@ -132,6 +134,41 @@ class SpoolManager:
                 continue
             item = manifests.get(ack.chunk_id)
             if item is None:
+                known_manifest, known_manifest_errors = self._acked_manifest(
+                    ack.chunk_id, apply_id, now, events
+                )
+                manifest_errors += known_manifest_errors
+                if known_manifest is not None:
+                    if ack.sha256 != known_manifest.sha256:
+                        mismatches += 1
+                        events.append(
+                            self._rejection_event(
+                                "ACK_HASH_MISMATCH",
+                                apply_id,
+                                ack_path,
+                                now,
+                                chunk_id=ack.chunk_id,
+                                expected_sha256=known_manifest.sha256,
+                                received_sha256=ack.sha256,
+                            )
+                        )
+                        self._quarantine(ack_path, "hash-mismatch")
+                        continue
+                    replayed += 1
+                    events.append(
+                        transfer_event(
+                            "ACK_REPLAYED",
+                            occurred_at=now,
+                            event_id=f"{apply_id}:{ack.chunk_id}:ACK_REPLAYED",
+                            apply_id=apply_id,
+                            collector_id=known_manifest.collector_id,
+                            chunk_id=ack.chunk_id,
+                            sha256=ack.sha256,
+                            ack_durable_at=utc_text(ack.durable_at),
+                        )
+                    )
+                    ack_path.unlink()
+                    continue
                 unknown += 1
                 events.append(
                     self._rejection_event(
@@ -297,6 +334,7 @@ class SpoolManager:
         result = AckApplyResult(
             seen=len(ack_paths),
             applied=applied,
+            replayed=replayed,
             gc_bytes=gc_bytes,
             invalid=invalid,
             hash_mismatches=mismatches,
@@ -315,6 +353,7 @@ class SpoolManager:
                 else "attention",
                 "acks_seen": result.seen,
                 "acks_applied": result.applied,
+                "acks_replayed": result.replayed,
                 "gc_bytes": result.gc_bytes,
                 "invalid_acks": result.invalid,
                 "hash_mismatches": result.hash_mismatches,
@@ -337,6 +376,81 @@ class SpoolManager:
         if completed_transactions:
             fsync_directory(self.applying_root)
         return result
+
+    def _acked_manifest(
+        self,
+        chunk_id: str,
+        apply_id: str,
+        now: datetime,
+        events: list[dict[str, object]],
+    ) -> tuple[ChunkManifestV1 | None, int]:
+        root = self.data_root / "control" / "acked-manifests"
+        manifest: ChunkManifestV1 | None = None
+        errors = 0
+        for path in sorted(root.glob(f"date=*/{chunk_id}.manifest.json")):
+            try:
+                candidate = MANIFEST_ADAPTER.validate_json(path.read_bytes())
+            except (OSError, ValueError) as exc:
+                errors += 1
+                events.append(
+                    transfer_event(
+                        "ACKED_MANIFEST_INVALID",
+                        occurred_at=now,
+                        event_id=f"{apply_id}:{path.name}:ACKED_MANIFEST_INVALID",
+                        apply_id=apply_id,
+                        path=str(path.relative_to(self.data_root)),
+                        error=repr(exc)[:500],
+                    )
+                )
+                continue
+            expected_path = (
+                root
+                / f"date={candidate.utc_date.isoformat()}"
+                / Path(candidate.data_path).with_suffix(".manifest.json").name
+            )
+            if path != expected_path:
+                errors += 1
+                events.append(
+                    transfer_event(
+                        "ACKED_MANIFEST_MISPLACED",
+                        occurred_at=now,
+                        event_id=f"{apply_id}:{path.name}:ACKED_MANIFEST_MISPLACED",
+                        apply_id=apply_id,
+                        chunk_id=candidate.chunk_id,
+                        path=str(path.relative_to(self.data_root)),
+                        expected_path=str(expected_path.relative_to(self.data_root)),
+                    )
+                )
+                continue
+            if candidate.chunk_id != chunk_id:
+                errors += 1
+                events.append(
+                    transfer_event(
+                        "ACKED_MANIFEST_ID_MISMATCH",
+                        occurred_at=now,
+                        event_id=f"{apply_id}:{path.name}:ACKED_MANIFEST_ID_MISMATCH",
+                        apply_id=apply_id,
+                        expected_chunk_id=chunk_id,
+                        received_chunk_id=candidate.chunk_id,
+                        path=str(path.relative_to(self.data_root)),
+                    )
+                )
+                continue
+            if manifest is not None and manifest != candidate:
+                errors += 1
+                manifest = None
+                events.append(
+                    transfer_event(
+                        "ACKED_MANIFEST_CONFLICT",
+                        occurred_at=now,
+                        event_id=f"{apply_id}:{chunk_id}:ACKED_MANIFEST_CONFLICT",
+                        apply_id=apply_id,
+                        chunk_id=chunk_id,
+                    )
+                )
+                return None, errors
+            manifest = candidate
+        return manifest, errors
 
     def _ready_manifests(
         self,

@@ -173,6 +173,58 @@ def test_spool_quarantines_malformed_ack_without_blocking_valid_ack(tmp_path: Pa
     assert len(tuple((tmp_path / "control/rejected-acks").glob("*.rejected"))) == 1
 
 
+def test_spool_accepts_exact_ack_replay_after_gc(tmp_path: Path) -> None:
+    data = b"durable chunk"
+    relative = "date=2026-08-10/writer=depth/chunk-replay.parquet"
+    manifest = ChunkManifestV1(
+        chunk_id="chunk-replay",
+        data_path=relative,
+        sha256=__import__("hashlib").sha256(data).hexdigest(),
+        size_bytes=len(data),
+        content_type="application/vnd.apache.parquet",
+        collector_id="tokyo01",
+        writer_group=WriterGroup.DEPTH,
+        utc_date=date(2026, 8, 10),
+        event_count=1,
+        min_app_receive_realtime_ns=1,
+        max_app_receive_realtime_ns=1,
+        data_contract_hash=HASH_A,
+        universe_hash=HASH_A,
+        created_at=datetime(2026, 8, 10, tzinfo=UTC),
+    )
+    data_path = tmp_path / "ready" / relative
+    manifest_path = data_path.with_suffix(".manifest.json")
+    ack_path = tmp_path / "control/acks/chunk-replay.ack.json"
+    ack = AckV1(
+        chunk_id=manifest.chunk_id,
+        sha256=manifest.sha256,
+        durable_at=datetime.now(UTC),
+    )
+    atomic_write_bytes(data_path, data)
+    atomic_write_bytes(manifest_path, canonical_json_bytes(manifest))
+    atomic_write_bytes(ack_path, canonical_json_bytes(ack))
+    spool = SpoolManager(tmp_path, max_bytes=10**9, minimum_free_bytes=0)
+    spool.initialize()
+
+    assert spool.apply_acks().applied == 1
+    atomic_write_bytes(ack_path, canonical_json_bytes(ack))
+
+    replay = spool.apply_acks()
+
+    assert replay.replayed == 1
+    assert replay.unknown == 0
+    assert not any((tmp_path / "control/rejected-acks").iterdir())
+
+    atomic_write_bytes(
+        ack_path,
+        canonical_json_bytes(ack.model_copy(update={"sha256": HASH_A})),
+    )
+    mismatch = spool.apply_acks()
+    assert mismatch.replayed == 0
+    assert mismatch.hash_mismatches == 1
+    assert len(tuple((tmp_path / "control/rejected-acks").iterdir())) == 1
+
+
 def test_spool_recovers_gc_transaction_after_audit_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

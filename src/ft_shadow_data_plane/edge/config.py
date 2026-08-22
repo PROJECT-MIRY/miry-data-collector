@@ -137,22 +137,25 @@ class EdgeConfig(BaseModel):
     market_ws_url: str
     rest_url: str
     public_connection_shards: int = Field(default=4, ge=1, le=4)
+    public_symbol_load_weights: dict[str, int] = Field(default_factory=dict)
     connection_rotation_seconds: int = Field(default=82_800, ge=3_600, le=86_000)
     connection_overlap_seconds: int = Field(default=15, ge=1, le=120)
     websocket_receive_timeout_seconds: float = Field(default=30.0, ge=5, le=300)
     websocket_ping_interval_seconds: float = Field(default=20.0, ge=5, le=60)
     websocket_ping_timeout_seconds: float = Field(default=20.0, ge=5, le=60)
     subscription_audit_seconds: float = Field(default=60.0, ge=10, le=300)
-    subscription_audit_timeout_seconds: float = Field(default=10.0, ge=1, le=30)
-    websocket_max_queue: int = Field(default=4, ge=1, le=16)
+    subscription_audit_timeout_seconds: float = Field(default=20.0, ge=1, le=30)
+    subscription_audit_failures_before_reconnect: int = Field(default=3, ge=1, le=5)
+    refresh_failures_before_reconnect: int = Field(default=2, ge=1, le=5)
+    websocket_max_queue: int = Field(default=16, ge=1, le=16)
     websocket_max_message_bytes: int = Field(default=2 * 1024**2, ge=1024**2)
     public_stream_liveness_seconds: float = Field(default=30.0, ge=10, le=300)
-    mark_price_liveness_seconds: float = Field(default=5.0, ge=3, le=30)
-    day_seal_grace_seconds: float = Field(default=90.0, ge=10, le=600)
+    mark_price_liveness_seconds: float = Field(default=15.0, ge=3, le=30)
+    day_seal_grace_seconds: float = Field(default=150.0, ge=10, le=600)
     lease_heartbeat_seconds: float = Field(default=30.0, ge=5, le=300)
     open_interest_interval_seconds: int = Field(default=30, ge=10, le=300)
     clock_sample_interval_seconds: int = Field(default=60, ge=10, le=300)
-    snapshot_request_interval_seconds: float = Field(default=2.0, ge=0.5, le=10)
+    snapshot_request_interval_seconds: float = Field(default=1.0, ge=0.5, le=10)
     queue_max_bytes: int = Field(default=64 * 1024**2, ge=16 * 1024**2)
     queue_warn_ratio: float = Field(default=0.70, gt=0, lt=1)
     queue_resume_ratio: float = Field(default=0.50, gt=0, lt=1)
@@ -167,8 +170,24 @@ class EdgeConfig(BaseModel):
     d0_enabled: bool = False
     log_level: str = "INFO"
 
+    @field_validator("public_symbol_load_weights")
+    @classmethod
+    def validate_public_symbol_load_weights(cls, values: dict[str, int]) -> dict[str, int]:
+        normalized = {symbol.upper(): weight for symbol, weight in values.items()}
+        if len(normalized) != len(values):
+            raise ValueError("public symbol load weights contain duplicate symbols")
+        if any(not SYMBOL_PATTERN.fullmatch(symbol) for symbol in normalized):
+            raise ValueError("public symbol load weights contain an invalid symbol")
+        if any(weight <= 0 for weight in normalized.values()):
+            raise ValueError("public symbol load weights must be positive")
+        return normalized
+
     @model_validator(mode="after")
     def validate_ratios(self) -> EdgeConfig:
+        if self.public_symbol_load_weights and set(self.public_symbol_load_weights) != set(
+            self.universe.members
+        ):
+            raise ValueError("public symbol load weights must cover the configured universe")
         if self.queue_resume_ratio >= self.queue_warn_ratio:
             raise ValueError("queue_resume_ratio must be below queue_warn_ratio")
         if self.day_seal_grace_seconds <= self.public_stream_liveness_seconds:
@@ -177,9 +196,11 @@ class EdgeConfig(BaseModel):
             raise ValueError("subscription audit must exceed websocket receive timeout")
         if self.subscription_audit_seconds <= self.subscription_audit_timeout_seconds:
             raise ValueError("subscription audit interval must exceed its response timeout")
-        if self.day_seal_grace_seconds <= (
-            self.subscription_audit_seconds + self.subscription_audit_timeout_seconds
-        ):
+        audit_detection_seconds = self.subscription_audit_seconds + (
+            self.subscription_audit_timeout_seconds
+            * self.subscription_audit_failures_before_reconnect
+        )
+        if self.day_seal_grace_seconds <= audit_detection_seconds:
             raise ValueError("day seal grace must exceed the subscription audit detection window")
         return self
 

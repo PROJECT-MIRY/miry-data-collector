@@ -19,7 +19,9 @@ from ft_shadow_data_plane.edge.sources import (
     ConnectionHandle,
     RestPollers,
     RouteRunner,
+    StableWeightedSharder,
     _advance_deadline,
+    _reconnect_delay,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -547,7 +549,8 @@ async def test_liveness_gap_stays_open_until_the_stream_proves_recovery(
         liveness_timeout_seconds=0.01,
         liveness_stream_types=(StreamType.MARK_PRICE,),
     )
-
+    runner._connection_generation = 1
+    runner._connection_ready.set()
     waits = 0
 
     async def recover_then_stop(_seconds: float) -> None:
@@ -584,7 +587,7 @@ async def test_liveness_gap_stays_open_until_the_stream_proves_recovery(
             (StreamType.MARK_PRICE,),
         )
     ]
-    assert runner._reconnect_requested.is_set()
+    assert not runner._reconnect_requested.is_set()
 
 
 @pytest.mark.asyncio
@@ -619,6 +622,8 @@ async def test_liveness_refresh_timeout_keeps_route_monitor_running(
         liveness_timeout_seconds=5,
         liveness_stream_types=(StreamType.MARK_PRICE,),
     )
+    runner._connection_generation = 1
+    runner._connection_ready.set()
 
     waits = 0
     refreshes = 0
@@ -647,6 +652,122 @@ async def test_liveness_refresh_timeout_keeps_route_monitor_running(
         (GapReason.CONNECTION_LOST, ("BTCUSDT",), (StreamType.MARK_PRICE,))
     ]
     assert gaps.closed == []
+    assert runner._reconnect_requested.is_set()
+
+
+@pytest.mark.asyncio
+async def test_stale_refresh_failure_cannot_reconnect_a_new_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [0.0]
+    stop = asyncio.Event()
+    gaps = FakeGaps()
+    monkeypatch.setattr("ft_shadow_data_plane.edge.sources.time.monotonic", lambda: clock[0])
+    runner = RouteRunner(
+        name="market-0",
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@markPrice@1s",),
+        instruments=("BTCUSDT",),
+        stream_types=(StreamType.MARK_PRICE,),
+        collector_id="tokyo01",
+        boot_id="boot",
+        ingest=SimpleNamespace(),  # type: ignore[arg-type]
+        queues=FakeQueues(),  # type: ignore[arg-type]
+        gaps=gaps,  # type: ignore[arg-type]
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        rotation_seconds=82_800,
+        overlap_seconds=15,
+        receive_timeout_seconds=30,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        service_stop=stop,
+        subscriptions_for=lambda values: tuple(
+            f"{symbol.lower()}@markPrice@1s" for symbol in values
+        ),
+        liveness_timeout_seconds=5,
+        liveness_stream_types=(StreamType.MARK_PRICE,),
+        refresh_failures_before_reconnect=2,
+    )
+    runner._connection_generation = 1
+    runner._connection_ready.set()
+    waits = 0
+
+    async def advance_then_stop(_seconds: float) -> None:
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            clock[0] = 6.0
+        else:
+            stop.set()
+
+    async def fail_after_replacement(
+        _keys: tuple[tuple[StreamType, str], ...],
+    ) -> None:
+        runner._connection_generation += 1
+        runner._connection_ready.clear()
+        raise TimeoutError("old connection refresh expired")
+
+    monkeypatch.setattr(runner, "_wait_or_stop", advance_then_stop)
+    monkeypatch.setattr(runner, "_refresh_keys", fail_after_replacement)
+
+    await asyncio.wait_for(runner.liveness_loop(), timeout=0.5)
+
+    assert not runner._reconnect_requested.is_set()
+
+
+def test_weighted_sharder_balances_hot_symbols_and_preserves_existing_routes() -> None:
+    weights = {
+        "BTCUSDT": 9_300,
+        "ETHUSDT": 16_900,
+        "XRPUSDT": 8_500,
+        "DOGEUSDT": 8_400,
+        "SOLUSDT": 4_100,
+        "PUMPUSDT": 7_100,
+        "ZECUSDT": 6_300,
+        "ADAUSDT": 2_300,
+        "BNBUSDT": 3_000,
+        "LINKUSDT": 4_500,
+        "LTCUSDT": 2_300,
+        "SUIUSDT": 3_500,
+    }
+    sharder = StableWeightedSharder(4, weights)
+    initial = tuple(weights)
+
+    shards = sharder.shards(initial)
+    loads = [sum(weights[symbol] for symbol in shard) for shard in shards]
+    assignments = {
+        symbol: index for index, shard in enumerate(shards) for symbol in shard
+    }
+
+    assert max(loads) / min(loads) < 1.10
+    updated = sharder.shards((*initial[1:], "NEWUSDT"))
+    updated_assignments = {
+        symbol: index for index, shard in enumerate(updated) for symbol in shard
+    }
+    assert all(
+        updated_assignments[symbol] == route
+        for symbol, route in assignments.items()
+        if symbol != initial[0]
+    )
+
+
+def test_reconnect_backoff_is_exponential_and_capped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "ft_shadow_data_plane.edge.sources.random.uniform",
+        lambda _minimum, _maximum: 1.0,
+    )
+
+    assert [_reconnect_delay(failures) for failures in range(1, 8)] == [
+        1.0,
+        2.0,
+        4.0,
+        8.0,
+        16.0,
+        30.0,
+        30.0,
+    ]
 
 
 @pytest.mark.asyncio

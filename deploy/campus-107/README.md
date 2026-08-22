@@ -23,10 +23,10 @@ module -t avail 2>&1 | grep apptainer
 command -v crontab flock sbatch ssh
 ```
 
-新装时使用 v0.3.7 的仓库目录、`ft-shadow-data-plane.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
+新装时使用 v0.3.8 的仓库目录、`ft-shadow-data-plane.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/ft-data-puller` 私钥。
 
-v0.3.7 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw 保持原始字节和日期分区，
+v0.3.8 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw 保持原始字节和日期分区，
 不删除、不改写；旧 runtime/derived 移入 `data/archive/legacy-contract-*`。新 runtime/derived 从空路径
 部署，并只处理新 formal-start 之后的日期。
 
@@ -76,7 +76,7 @@ mkdir -p "$BASE/data/derived"
 新代码不扫描 `$BASE/data/archive`。旧日期仍在 `$BASE/data/raw`，需要旧版离线环境时使用 archive
 中的 runtime；不得把旧 control 状态链接回新的 runtime。新旧实验以 formal-start 时间边界区分。
 
-## 3. 校验并安装 v0.3.7
+## 3. 校验并安装 v0.3.8
 
 ```bash
 cd /home/scc/pb24000367/Projects/bn/ft-shadow-data-plane

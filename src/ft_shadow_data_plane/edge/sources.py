@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -27,7 +28,6 @@ from ft_shadow_data_plane.edge.binance import (
     SubscriptionUpdate,
     market_subscriptions,
     public_subscriptions,
-    shard_instruments,
 )
 from ft_shadow_data_plane.edge.config import EdgeConfig
 from ft_shadow_data_plane.edge.gaps import GapJournal
@@ -35,6 +35,98 @@ from ft_shadow_data_plane.edge.ingest import IngestCoordinator
 from ft_shadow_data_plane.edge.queue import ByteBoundedQueues, QueueOverloaded
 
 logger = logging.getLogger(__name__)
+
+
+class StableWeightedSharder:
+    def __init__(self, count: int, weights: dict[str, int]) -> None:
+        if count < 1:
+            raise ValueError("shard count must be positive")
+        self._count = count
+        self._weights = weights
+        self._assignments: dict[str, int] = {}
+
+    def shards(self, instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+        shard_count = min(self._count, len(instruments))
+        if shard_count == 0:
+            return ()
+        initial_assignment = not self._assignments
+        active = set(instruments)
+        self._assignments = {
+            symbol: shard
+            for symbol, shard in self._assignments.items()
+            if symbol in active and shard < shard_count
+        }
+        shards: list[list[str]] = [[] for _ in range(shard_count)]
+        loads = [0] * shard_count
+        for symbol, shard in sorted(self._assignments.items()):
+            shards[shard].append(symbol)
+            loads[shard] += self._weight(symbol)
+        unassigned = sorted(
+            active - self._assignments.keys(),
+            key=lambda symbol: (-self._weight(symbol), symbol),
+        )
+        for symbol in unassigned:
+            shard = min(range(shard_count), key=lambda index: (loads[index], index))
+            self._assignments[symbol] = shard
+            shards[shard].append(symbol)
+            loads[shard] += self._weight(symbol)
+        if initial_assignment:
+            self._improve_initial_balance(shards, loads)
+            self._assignments = {
+                symbol: shard for shard, symbols in enumerate(shards) for symbol in symbols
+            }
+        return tuple(tuple(sorted(shard)) for shard in shards)
+
+    def _weight(self, symbol: str) -> int:
+        if symbol in self._weights:
+            return self._weights[symbol]
+        if self._weights:
+            ordered = sorted(self._weights.values())
+            return ordered[len(ordered) // 2]
+        return 1
+
+    def _improve_initial_balance(self, shards: list[list[str]], loads: list[int]) -> None:
+        while True:
+            current_spread = max(loads) - min(loads)
+            best: tuple[int, int, str, str, int, int] | None = None
+            best_spread = current_spread
+            for left in range(len(shards)):
+                for right in range(left + 1, len(shards)):
+                    for left_symbol in shards[left]:
+                        for right_symbol in shards[right]:
+                            next_left = (
+                                loads[left]
+                                - self._weight(left_symbol)
+                                + self._weight(right_symbol)
+                            )
+                            next_right = (
+                                loads[right]
+                                - self._weight(right_symbol)
+                                + self._weight(left_symbol)
+                            )
+                            next_loads = [*loads]
+                            next_loads[left] = next_left
+                            next_loads[right] = next_right
+                            spread = max(next_loads) - min(next_loads)
+                            if spread < best_spread:
+                                best_spread = spread
+                                best = (
+                                    left,
+                                    right,
+                                    left_symbol,
+                                    right_symbol,
+                                    next_left,
+                                    next_right,
+                                )
+            if best is None:
+                return
+            left, right, left_symbol, right_symbol, next_left, next_right = best
+            shards[left].remove(left_symbol)
+            shards[left].append(right_symbol)
+            shards[right].remove(right_symbol)
+            shards[right].append(left_symbol)
+            loads[left] = next_left
+            loads[right] = next_right
 
 
 @dataclass(slots=True)
@@ -75,6 +167,8 @@ class RouteRunner:
         liveness_stream_types: tuple[StreamType, ...] | None = None,
         subscription_audit_seconds: float = 60.0,
         subscription_audit_timeout_seconds: float = 10.0,
+        subscription_audit_failures_before_reconnect: int = 1,
+        refresh_failures_before_reconnect: int = 2,
         websocket_max_queue: int = 4,
         websocket_max_message_bytes: int = 2 * 1024**2,
     ) -> None:
@@ -110,6 +204,10 @@ class RouteRunner:
         )
         self._subscription_audit_seconds = subscription_audit_seconds
         self._subscription_audit_timeout_seconds = subscription_audit_timeout_seconds
+        self._subscription_audit_failures_before_reconnect = (
+            subscription_audit_failures_before_reconnect
+        )
+        self._refresh_failures_before_reconnect = refresh_failures_before_reconnect
         self._websocket_max_queue = websocket_max_queue
         self._websocket_max_message_bytes = websocket_max_message_bytes
         now = time.monotonic()
@@ -120,6 +218,8 @@ class RouteRunner:
             for symbol in instruments
         }
         self._liveness_changed = asyncio.Event()
+        self._connection_generation = 0
+        self._connection_ready = asyncio.Event()
 
     @property
     def instruments(self) -> tuple[str, ...]:
@@ -157,6 +257,8 @@ class RouteRunner:
             await self._service_stop.wait()
             return
         active_gaps: dict[tuple[StreamType, str], tuple[str, float]] = {}
+        failure_generation = -1
+        consecutive_refresh_failures = 0
         while not self._service_stop.is_set():
             await self._wait_or_stop(max(1.0, timeout / 2))
             if self._service_stop.is_set():
@@ -208,6 +310,7 @@ class RouteRunner:
                 )
                 active_gaps[key] = (gap_id, self._last_event[key][0])
             try:
+                refresh_generation = self._connection_generation
                 await self._refresh_keys(stale_keys)
                 if self._service_stop.is_set():
                     return
@@ -231,6 +334,8 @@ class RouteRunner:
                         detail="targeted subscriptions and L2 snapshots refreshed",
                     )
                     del active_gaps[key]
+                failure_generation = -1
+                consecutive_refresh_failures = 0
             except (
                 QueueOverloaded,
                 aiohttp.ClientError,
@@ -247,8 +352,19 @@ class RouteRunner:
                 )
                 if isinstance(exc, QueueOverloaded):
                     await self._queues.wait_until_resumable()
+                elif (
+                    refresh_generation == self._connection_generation
+                    and self._connection_ready.is_set()
+                ):
+                    if failure_generation != refresh_generation:
+                        failure_generation = refresh_generation
+                        consecutive_refresh_failures = 0
+                    consecutive_refresh_failures += 1
+                    if consecutive_refresh_failures >= self._refresh_failures_before_reconnect:
+                        self._reconnect_requested.set()
                 else:
-                    self._reconnect_requested.set()
+                    failure_generation = -1
+                    consecutive_refresh_failures = 0
 
     async def _refresh_keys(self, keys: tuple[tuple[StreamType, str], ...]) -> None:
         if self._subscriptions_for is None:
@@ -322,6 +438,8 @@ class RouteRunner:
         gap_reason = GapReason.CONNECTION_LOST
         recovery_started_at: float | None = None
         transport_recovered_at: float | None = None
+        reconnect_failures = 0
+        active_since: float | None = None
         while not self._service_stop.is_set():
             if current is None:
                 try:
@@ -348,6 +466,8 @@ class RouteRunner:
                     current = await self._start_ready_connection(
                         on_transport_ready=on_transport_ready
                     )
+                    self._activate_connection()
+                    active_since = time.monotonic()
                     self._on_ready(self._name)
                     if transport_recovered_at is not None:
                         now = time.monotonic()
@@ -385,7 +505,8 @@ class RouteRunner:
                             str(exc),
                             affected_from_realtime_ns=_error_affected_from(exc),
                         )
-                    await self._wait_or_stop(5)
+                    reconnect_failures += 1
+                    await self._wait_or_stop(_reconnect_delay(reconnect_failures))
                     continue
 
             outcome = await self._wait_current(current)
@@ -393,6 +514,7 @@ class RouteRunner:
                 await _stop_handle(current)
                 return
             if outcome in {"failed", "reconnect"}:
+                self._connection_ready.clear()
                 error = (
                     _task_error(current.task)
                     if outcome == "failed"
@@ -425,7 +547,10 @@ class RouteRunner:
                 if gap_reason is GapReason.INGEST_OVERLOAD:
                     await self._queues.wait_until_resumable()
                 else:
-                    await self._wait_or_stop(1)
+                    if active_since is not None and time.monotonic() - active_since >= 60:
+                        reconnect_failures = 0
+                    reconnect_failures += 1
+                    await self._wait_or_stop(_reconnect_delay(reconnect_failures))
                 continue
 
             try:
@@ -438,6 +563,8 @@ class RouteRunner:
                         return
                     await _stop_handle(current)
                     current = replacement
+                    self._activate_connection()
+                    active_since = time.monotonic()
             except asyncio.CancelledError:
                 await _stop_handle(current)
                 return
@@ -487,6 +614,9 @@ class RouteRunner:
             on_event=self._mark_event,
             subscription_audit_seconds=self._subscription_audit_seconds,
             subscription_audit_timeout_seconds=self._subscription_audit_timeout_seconds,
+            subscription_audit_failures_before_reconnect=(
+                self._subscription_audit_failures_before_reconnect
+            ),
             transport_ready=transport_ready,
             transport_ready_keys=tuple(
                 (stream_type, symbol)
@@ -658,6 +788,11 @@ class RouteRunner:
             await asyncio.wait_for(self._service_stop.wait(), timeout=seconds)
         except TimeoutError:
             pass
+
+    def _activate_connection(self) -> None:
+        self._connection_generation += 1
+        self._reconnect_requested.clear()
+        self._connection_ready.set()
 
 
 class RestPollers:
@@ -1144,6 +1279,10 @@ class SourceManager:
         self._pollers: RestPollers | None = None
         self._instruments: tuple[str, ...] = ()
         self._update_lock = asyncio.Lock()
+        self._public_sharder = StableWeightedSharder(
+            config.public_connection_shards,
+            config.public_symbol_load_weights,
+        )
 
     @property
     def running(self) -> bool:
@@ -1200,7 +1339,7 @@ class SourceManager:
         if self._task is None or self._pollers is None:
             raise RuntimeError("sources are not running")
         async with self._update_lock:
-            shards = shard_instruments(instruments, self._config.public_connection_shards)
+            shards = self._public_sharder.shards(instruments)
             updates = [
                 self._routes[f"public-{index}"].update_instruments(shard)
                 for index, shard in enumerate(shards)
@@ -1221,7 +1360,7 @@ class SourceManager:
                 snapshot_interval_seconds=self._config.snapshot_request_interval_seconds,
             )
             routes: list[Awaitable[None]] = []
-            shards = shard_instruments(instruments, self._config.public_connection_shards)
+            shards = self._public_sharder.shards(instruments)
             expected = {
                 *(f"public-{index}" for index in range(len(shards))),
                 "market-0",
@@ -1275,6 +1414,12 @@ class SourceManager:
                     subscription_audit_timeout_seconds=(
                         self._config.subscription_audit_timeout_seconds
                     ),
+                    subscription_audit_failures_before_reconnect=(
+                        self._config.subscription_audit_failures_before_reconnect
+                    ),
+                    refresh_failures_before_reconnect=(
+                        self._config.refresh_failures_before_reconnect
+                    ),
                     websocket_max_queue=self._config.websocket_max_queue,
                     websocket_max_message_bytes=self._config.websocket_max_message_bytes,
                 )
@@ -1310,6 +1455,12 @@ class SourceManager:
                 subscription_audit_seconds=self._config.subscription_audit_seconds,
                 subscription_audit_timeout_seconds=(
                     self._config.subscription_audit_timeout_seconds
+                ),
+                subscription_audit_failures_before_reconnect=(
+                    self._config.subscription_audit_failures_before_reconnect
+                ),
+                refresh_failures_before_reconnect=(
+                    self._config.refresh_failures_before_reconnect
                 ),
                 websocket_max_queue=self._config.websocket_max_queue,
                 websocket_max_message_bytes=self._config.websocket_max_message_bytes,
@@ -1402,6 +1553,11 @@ def _error_affected_from(error: BaseException | None) -> int | None:
     if isinstance(error, SubscriptionAuditError):
         return error.affected_from_realtime_ns
     return None
+
+
+def _reconnect_delay(failures: int) -> float:
+    exponential = min(30.0, float(2 ** max(0, failures - 1)))
+    return min(30.0, exponential * random.uniform(0.8, 1.2))
 
 
 async def _wait_event(event: asyncio.Event, delay_seconds: float) -> None:

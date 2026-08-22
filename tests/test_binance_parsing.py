@@ -69,6 +69,7 @@ class MissingSubscriptionWebSocket:
 class MissingAuditResponseWebSocket:
     def __init__(self) -> None:
         self.responses: asyncio.Queue[bytes] = asyncio.Queue()
+        self.audit_requests = 0
 
     async def __aenter__(self) -> MissingAuditResponseWebSocket:
         return self
@@ -80,6 +81,8 @@ class MissingAuditResponseWebSocket:
         message = orjson.loads(value)
         if message["method"] == "SUBSCRIBE":
             await self.responses.put(orjson.dumps({"result": None, "id": message["id"]}))
+        elif message["method"] == "LIST_SUBSCRIPTIONS":
+            self.audit_requests += 1
 
     async def recv(self, *, decode: bool) -> bytes:
         assert decode is False
@@ -722,8 +725,10 @@ async def test_subscription_audit_response_cannot_silently_disappear(
         on_depth_reanchored=close_depth_gap,
         subscription_audit_seconds=0.01,
         subscription_audit_timeout_seconds=0.01,
+        subscription_audit_failures_before_reconnect=3,
     )
 
     with pytest.raises(SubscriptionAuditError, match="audit response was not received") as captured:
         await asyncio.wait_for(connection.run(), timeout=0.5)
     assert captured.value.affected_from_realtime_ns > 0
+    assert websocket.audit_requests == 3

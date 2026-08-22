@@ -997,7 +997,7 @@ class RestPollers:
                 await _wait_event(self._stop, 30)
 
     async def _fetch_discovery(self, path: str, stream_type: StreamType) -> tuple[bytes, int]:
-        payload, requested_at, observed_at, request_id = await self._rest.fetch(path)
+        payload, requested_at, observed_at, request_id = await self._rest.fetch_background(path)
         event = self._discovery_identity.event(
             stream_type=stream_type,
             exchange_symbol=None,
@@ -1151,7 +1151,7 @@ class RestPollers:
         delay = 1.0
         for attempt in range(4):
             try:
-                return await self._rest.fetch(path, params=params)
+                return await self._rest.fetch_background(path, params=params)
             except (aiohttp.ClientError, TimeoutError):
                 if attempt == 3:
                     raise
@@ -1358,6 +1358,7 @@ class SourceManager:
                 self._config.rest_url,
                 session,
                 snapshot_interval_seconds=self._config.snapshot_request_interval_seconds,
+                snapshot_max_concurrency=self._config.snapshot_request_concurrency,
             )
             routes: list[Awaitable[None]] = []
             shards = self._public_sharder.shards(instruments)

@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.3.8 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.3.9 collector。数据根为
 `/srv/ft-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -19,7 +19,7 @@ timedatectl status
 
 ## 2. 安装目录和服务
 
-在 v0.3.8 仓库根目录执行：
+在 v0.3.9 仓库根目录执行：
 
 ```bash
 sudo ./deploy/vultr/install.sh
@@ -72,7 +72,7 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 ## 4. 配置正式 60 币和镜像
 
-`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.8 示例。核对三个角色为 50/5/5、
+`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.9 示例。核对三个角色为 50/5/5、
 `bootstrap_evidence_sha256` 与正式报告一致、`automation_enabled: true`、public shards 为 4，
 queue 为 64MiB，并且 `public_symbol_load_weights` 恰好覆盖当前 60 币。不要加入旧字段。
 
@@ -94,7 +94,7 @@ docker pull "$EDGE_IMAGE"
 docker image inspect "$EDGE_IMAGE" --format '{{json .RepoDigests}}'
 ```
 
-Compose 已固定 0.90 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
+Compose 已固定 1.00 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
 
 ## 5. v0.3.8 clean start
 
@@ -260,3 +260,10 @@ universe、formal-start 哈希和 open gap；安装新部署脚本后，把示�
 `public_symbol_load_weights` 及可靠性参数合入现有配置，不能覆盖现有正式名单。更新 immutable
 image digest 后只执行一次受控重启。重启后要求 `7.0 / sequence 8`、60 币和哈希不变，所有 route
 完成 snapshot ready，open gap 回到 0，107 ACK 继续推进。107 不需要升级。
+
+从 v0.3.8 升级 v0.3.9 同样禁止 clean start，且不改 107。先记录 active universe、formal-start
+哈希、open gap、ready 和 ACK 计数；只安装新部署脚本，把现有 `edge.yaml` 的
+`snapshot_request_interval_seconds` 改为 `0.75` 并新增 `snapshot_request_concurrency: 4`，然后把
+`EDGE_IMAGE` 更新为 v0.3.9 immutable digest。只允许一次受控重启，保留 raw、ready、writing、
+ACK、universe、gap、lease 和 formal-start。重启后全部 route 的 snapshot scheduling 应在约
+13 秒内完成；网络 HTTP 尾延迟仍可能延长单币 bridge，但不得重新形成全局串行等待。

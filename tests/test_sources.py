@@ -81,6 +81,11 @@ class DailyKlineRest:
         ][: int(params["limit"])]
         return orjson.dumps(rows), 1, 2, f"request-{len(self.params)}"
 
+    async def fetch_background(
+        self, path: str, *, params: dict[str, str | int] | None = None
+    ) -> tuple[bytes, int, int, str]:
+        return await self.fetch(path, params=params)
+
 
 class RecordingIngest:
     def __init__(self) -> None:

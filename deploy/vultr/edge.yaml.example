@@ -181,7 +181,8 @@ day_seal_grace_seconds: 150
 lease_heartbeat_seconds: 30
 open_interest_interval_seconds: 30
 clock_sample_interval_seconds: 60
-snapshot_request_interval_seconds: 1.0
+snapshot_request_interval_seconds: 0.75
+snapshot_request_concurrency: 4
 queue_max_bytes: 67108864
 queue_warn_ratio: 0.70
 queue_resume_ratio: 0.50

@@ -9,6 +9,7 @@ import pytest
 from ft_shadow_data_plane.central.binance import logical_identity, parse_typed_row
 from ft_shadow_data_plane.contracts.models import RawEventV1, StreamType
 from ft_shadow_data_plane.edge.binance import (
+    BinanceRestClient,
     BinanceWebSocketConnection,
     SourceIdentity,
     SubscriptionAuditError,
@@ -109,6 +110,26 @@ class MissingAuditResponseWebSocket:
             )
 
 
+class RecoveringAuditWebSocket(MissingAuditResponseWebSocket):
+    def __init__(self) -> None:
+        super().__init__()
+        self.recovered = asyncio.Event()
+
+    async def send(self, value: str) -> None:
+        message = orjson.loads(value)
+        if message["method"] == "SUBSCRIBE":
+            await self.responses.put(orjson.dumps({"result": None, "id": message["id"]}))
+            return
+        if message["method"] != "LIST_SUBSCRIPTIONS":
+            return
+        self.audit_requests += 1
+        if self.audit_requests == 2:
+            await self.responses.put(
+                orjson.dumps({"result": ["btcusdt@aggTrade"], "id": message["id"]})
+            )
+            self.recovered.set()
+
+
 class RecoveryWebSocket:
     def __init__(self) -> None:
         self.responses: asyncio.Queue[bytes] = asyncio.Queue()
@@ -183,6 +204,115 @@ class RecordingIngest:
 
     async def put(self, event: RawEventV1) -> None:
         self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_rate_slot_does_not_serialize_slow_http_requests() -> None:
+    client = BinanceRestClient(
+        "https://example.invalid",
+        SimpleNamespace(),  # type: ignore[arg-type]
+        snapshot_interval_seconds=0.01,
+    )
+    started = [asyncio.Event(), asyncio.Event()]
+    release = asyncio.Event()
+    calls = 0
+
+    async def slow_fetch(
+        path: str, *, params: dict[str, str | int] | None = None
+    ) -> tuple[bytes, int, int, str]:
+        nonlocal calls
+        assert path == "/fapi/v1/depth"
+        assert params is not None
+        index = calls
+        calls += 1
+        started[index].set()
+        await release.wait()
+        return b"{}", 1, 2, str(index)
+
+    client.fetch = slow_fetch  # type: ignore[method-assign]
+    requests = [
+        asyncio.create_task(client.fetch_snapshot("/fapi/v1/depth", symbol=symbol))
+        for symbol in ("BTCUSDT", "ETHUSDT")
+    ]
+    try:
+        await asyncio.wait_for(started[0].wait(), timeout=0.1)
+        await asyncio.wait_for(started[1].wait(), timeout=0.1)
+    finally:
+        release.set()
+        await asyncio.gather(*requests, return_exceptions=True)
+
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_snapshot_scheduler_bounds_slow_http_concurrency() -> None:
+    client = BinanceRestClient(
+        "https://example.invalid",
+        SimpleNamespace(),  # type: ignore[arg-type]
+        snapshot_interval_seconds=0.001,
+        snapshot_max_concurrency=4,
+    )
+    four_started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def blocked_fetch(
+        path: str, *, params: dict[str, str | int] | None = None
+    ) -> tuple[bytes, int, int, str]:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            four_started.set()
+        await release.wait()
+        return b"{}", 1, 2, path
+
+    client.fetch = blocked_fetch  # type: ignore[method-assign]
+    requests = [
+        asyncio.create_task(client.fetch_snapshot("/fapi/v1/depth", symbol=str(index)))
+        for index in range(6)
+    ]
+    try:
+        await asyncio.wait_for(four_started.wait(), timeout=0.1)
+        await asyncio.sleep(0.02)
+        assert calls == 4
+    finally:
+        release.set()
+        await asyncio.gather(*requests)
+
+    assert calls == 6
+
+
+@pytest.mark.asyncio
+async def test_background_rest_request_waits_for_snapshot_recovery() -> None:
+    client = BinanceRestClient(
+        "https://example.invalid",
+        SimpleNamespace(),  # type: ignore[arg-type]
+        snapshot_interval_seconds=0.01,
+    )
+    snapshot_started = asyncio.Event()
+    background_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def controlled_fetch(
+        path: str, *, params: dict[str, str | int] | None = None
+    ) -> tuple[bytes, int, int, str]:
+        if path == "/fapi/v1/depth":
+            snapshot_started.set()
+            await release.wait()
+        else:
+            background_started.set()
+        return b"{}", 1, 2, path
+
+    client.fetch = controlled_fetch  # type: ignore[method-assign]
+    snapshot = asyncio.create_task(client.fetch_snapshot("/fapi/v1/depth", symbol="BTCUSDT"))
+    await asyncio.wait_for(snapshot_started.wait(), timeout=0.1)
+    background = asyncio.create_task(client.fetch_background("/fapi/v1/exchangeInfo"))
+    await asyncio.sleep(0.02)
+    assert not background_started.is_set()
+
+    release.set()
+    await asyncio.gather(snapshot, background)
+    assert background_started.is_set()
 
 
 @pytest.mark.parametrize(
@@ -732,3 +862,49 @@ async def test_subscription_audit_response_cannot_silently_disappear(
         await asyncio.wait_for(connection.run(), timeout=0.5)
     assert captured.value.affected_from_realtime_ns > 0
     assert websocket.audit_requests == 3
+
+
+@pytest.mark.asyncio
+async def test_subscription_audit_recovers_after_one_missing_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    websocket = RecoveringAuditWebSocket()
+    monkeypatch.setattr(
+        "ft_shadow_data_plane.edge.binance.connect",
+        lambda *args, **kwargs: websocket,
+    )
+    stop = asyncio.Event()
+
+    async def ignore_depth_gap(*args: object) -> str:
+        return "gap-depth"
+
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@aggTrade",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=stop,
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=ignore_depth_gap,
+        on_depth_reanchored=ignore_depth_gap,
+        subscription_audit_seconds=0.01,
+        subscription_audit_timeout_seconds=0.01,
+        subscription_audit_failures_before_reconnect=3,
+    )
+
+    task = asyncio.create_task(connection.run())
+    try:
+        await asyncio.wait_for(websocket.recovered.wait(), timeout=0.2)
+        await asyncio.sleep(0.01)
+        assert not task.done()
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=0.2)

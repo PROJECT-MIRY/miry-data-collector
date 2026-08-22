@@ -122,10 +122,11 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 
 目标机器为 1 vCPU、1GiB RAM、25GB 磁盘，不允许通过减少币数或降低采集频率达标。
 
-- Docker：`0.90 CPU`、`768MiB`、`256 PIDs`；
+- Docker：`1.00 CPU`、`768MiB`、`256 PIDs`；
 - 4 个稳定加权 public shards，初始按生产消息率最小负载分配，成员未变化时不跨 route 搬迁；
 - WebSocket queue 为 16，单消息上限 2MiB；
-- 1,000 档 snapshot 全局最小间隔 1 秒，持续上限约 1,200 request-weight/min；
+- 1,000 档 snapshot 起点全局最小间隔 0.75 秒、最多 4 个 HTTP 在途，持续上限约 1,600
+  request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；
 - raw queue 总字节上限 64MiB，70% 告警，50% 恢复；
 - writer batch 上限 2000 events 或 2MiB；
 - RSS p95 不超过 600MiB，峰值不超过 700MiB，无 OOM；

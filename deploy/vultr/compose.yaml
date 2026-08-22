@@ -16,7 +16,7 @@ services:
       - no-new-privileges:true
     pids_limit: 256
     mem_limit: 768m
-    cpus: 0.90
+    cpus: 1.00
     stop_grace_period: 2m
     restart: "no"
     logging:

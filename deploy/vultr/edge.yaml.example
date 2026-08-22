@@ -2,7 +2,7 @@ collector_id: tokyo01
 data_root: /data
 universe:
   experiment_id: formal-60-v3-2026-08-22
-  bootstrap_evidence_sha256: 146dd4ae8ae102b026f24760937298368d2efbaf87569624be943553173eed8c
+  bootstrap_evidence_sha256: 06948c87578719a63fbb3358ab3fe473bbc6e6e8ae056565bfc1976545435a6c
   core_generation: 7
   candidate_revision: 0
   decision_sequence: 8
@@ -75,19 +75,13 @@ universe:
   decision_cutoff_minute_utc: 55
   liquidity_window_days: 14
   probe_minimum_complete_days: 7
-  minimum_median_daily_quote_volume: 10000000
-  minimum_q25_daily_quote_volume: 5000000
-  minimum_daily_quote_volume: 3000000
-  maximum_quote_volume_cv: 1.2
-  minimum_median_daily_trades: 100000
-  minimum_q25_daily_trades: 50000
-  minimum_daily_trades: 25000
+  market_context_baseline_days: 28
+  market_context_change_ratio: 1.25
+  market_context_breadth_ratio: 0.70
+  market_context_minimum_instruments: 60
   liquidity_depth_samples: 3
   liquidity_book_ticker_samples: 5
-  maximum_spread_bps: 10
-  minimum_thin_depth_10bps: 800
-  minimum_thin_depth_50bps: 10000
-  depth_stable_candidate_count: 200
+  depth_mature_candidate_count: 200
   depth_probe_candidate_count: 100
   liquidity_request_interval_seconds: 0.25
   candidate_minimum_dwell_hours: 48
@@ -98,7 +92,7 @@ universe:
   core_entry_rank: 45
   core_retain_rank: 55
   boundary_retain_rank: 10
-  stable_pool_warning_size: 65
+  mature_pool_warning_size: 65
 public_ws_url: wss://fstream.binance.com/public/stream
 market_ws_url: wss://fstream.binance.com/market/stream
 rest_url: https://fapi.binance.com

@@ -22,16 +22,22 @@ def liquidity_snapshot(
     *,
     inactive: str | None = None,
     incomplete: frozenset[str] = frozenset(),
-    low_trades: frozenset[str] = frozenset(),
+    missing_depth: frozenset[str] = frozenset(),
+    weak_market: frozenset[str] = frozenset(),
+    low_activity: frozenset[str] = frozenset(),
+    volatile_activity: frozenset[str] = frozenset(),
+    activity_factor: int = 1,
+    activity_days: int = 0,
+    activity_symbols: frozenset[str] | None = None,
 ) -> DiscoverySnapshot:
     cutoff = datetime.combine(observed_at.date(), datetime.min.time(), UTC)
     cutoff_ms = int(cutoff.timestamp() * 1000)
-    start_ms = cutoff_ms - 14 * DAY_MS
+    start_ms = cutoff_ms - 35 * DAY_MS
     exchange_rows = []
     kline_rows: dict[str, dict[str, object]] = {}
     depth_rows: dict[str, list[dict[str, object]]] = {}
     book_rows = []
-    for index, symbol in enumerate(symbols(0, 70)):
+    for index, symbol in enumerate(symbols(0, 75)):
         age_days = 100 if index < 65 else 20 - (index - 65)
         exchange_rows.append(
             {
@@ -43,37 +49,54 @@ def liquidity_snapshot(
                 "onboardDate": int((cutoff - timedelta(days=age_days)).timestamp() * 1000),
             }
         )
-        volume = 100_000_000 - index * 1_000_000
-        trades = 20_000 if symbol in low_trades else 200_000 - index * 1_000
-        bars = [
-            [
-                open_ms,
-                "1",
-                "1",
-                "1",
-                "1",
-                "1",
-                open_ms + DAY_MS - 1,
-                str(volume),
-                trades,
-            ]
-            for open_ms in range(start_ms, cutoff_ms, DAY_MS)
-        ]
+        base_volume = 1_000 if symbol in low_activity else 100_000_000 - index * 1_000_000
+        base_trades = 10 if symbol in low_activity else 200_000 - index * 1_000
+        first_full_day = cutoff_ms - age_days * DAY_MS
+        bars = []
+        for open_ms in range(max(start_ms, first_full_day), cutoff_ms, DAY_MS):
+            volume = base_volume
+            trades = base_trades
+            selected_for_move = activity_symbols is None or symbol in activity_symbols
+            if selected_for_move and open_ms >= cutoff_ms - activity_days * DAY_MS:
+                volume *= activity_factor
+                trades *= activity_factor
+            if symbol in volatile_activity and open_ms == cutoff_ms - DAY_MS:
+                volume *= 1_000
+                trades *= 1_000
+            bars.append(
+                [
+                    open_ms,
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    "1",
+                    open_ms + DAY_MS - 1,
+                    str(volume),
+                    trades,
+                ]
+            )
         if symbol in incomplete:
             bars.pop()
         kline_rows[symbol] = {"payload": bars, "response_sha256": "a" * 64}
-        depth_rows[symbol] = [
-            {
-                "payload": {
-                    "lastUpdateId": sample,
-                    "bids": [["99.99", "1000"], ["99.5", "1000"]],
-                    "asks": [["100.01", "1000"], ["100.5", "1000"]],
-                },
-                "response_sha256": "b" * 64,
-                "round": sample,
-            }
-            for sample in range(1, 4)
-        ]
+        if symbol not in missing_depth:
+            bid_price, ask_price, quantity = (
+                ("90", "110", "0.001")
+                if symbol in weak_market
+                else ("99.99", "100.01", "1000")
+            )
+            depth_rows[symbol] = [
+                {
+                    "payload": {
+                        "lastUpdateId": sample,
+                        "bids": [[bid_price, quantity]],
+                        "asks": [[ask_price, quantity]],
+                    },
+                    "response_sha256": "b" * 64,
+                    "round": sample,
+                }
+                for sample in range(1, 4)
+            ]
         book_rows.append(
             {"symbol": symbol, "bidPrice": "99.99", "askPrice": "100.01"}
         )

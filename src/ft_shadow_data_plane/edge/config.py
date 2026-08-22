@@ -30,19 +30,15 @@ class UniversePolicyConfig(BaseModel):
     automation_enabled: bool = True
     liquidity_window_days: int = Field(default=14, ge=14, le=30)
     probe_minimum_complete_days: int = Field(default=7, ge=1, le=14)
-    minimum_median_daily_quote_volume: Decimal = Field(default=Decimal("10000000"), gt=0)
-    minimum_q25_daily_quote_volume: Decimal = Field(default=Decimal("5000000"), gt=0)
-    minimum_daily_quote_volume: Decimal = Field(default=Decimal("3000000"), gt=0)
-    maximum_quote_volume_cv: Decimal = Field(default=Decimal("1.2"), gt=0)
-    minimum_median_daily_trades: int = Field(default=100_000, gt=0)
-    minimum_q25_daily_trades: int = Field(default=50_000, gt=0)
-    minimum_daily_trades: int = Field(default=25_000, gt=0)
+    market_context_baseline_days: int = Field(default=28, ge=14, le=60)
+    market_context_change_ratio: Decimal = Field(default=Decimal("1.25"), gt=1)
+    market_context_breadth_ratio: Decimal = Field(
+        default=Decimal("0.70"), gt=Decimal("0.5"), le=1
+    )
+    market_context_minimum_instruments: int = Field(default=60, ge=60)
     liquidity_depth_samples: int = Field(default=3, ge=3, le=5)
     liquidity_book_ticker_samples: int = Field(default=5, ge=3, le=10)
-    maximum_spread_bps: Decimal = Field(default=Decimal("10"), gt=0)
-    minimum_thin_depth_10bps: Decimal = Field(default=Decimal("800"), gt=0)
-    minimum_thin_depth_50bps: Decimal = Field(default=Decimal("10000"), gt=0)
-    depth_stable_candidate_count: int = Field(default=200, ge=60, le=200)
+    depth_mature_candidate_count: int = Field(default=200, ge=60, le=200)
     depth_probe_candidate_count: int = Field(default=100, ge=10, le=100)
     liquidity_request_interval_seconds: float = Field(default=0.25, ge=0.1, le=2)
     candidate_minimum_dwell_hours: int = Field(default=48, ge=1)
@@ -53,7 +49,7 @@ class UniversePolicyConfig(BaseModel):
     core_entry_rank: int = Field(default=45, ge=1, le=50)
     core_retain_rank: int = Field(default=55, ge=50)
     boundary_retain_rank: int = Field(default=10, ge=5)
-    stable_pool_warning_size: int = Field(default=65, ge=55)
+    mature_pool_warning_size: int = Field(default=65, ge=55)
 
     @field_validator("core", "boundary", "probe")
     @classmethod
@@ -81,14 +77,6 @@ class UniversePolicyConfig(BaseModel):
             raise ValueError("decision cutoff must follow discovery in the same UTC hour")
         if self.probe_minimum_complete_days > self.liquidity_window_days:
             raise ValueError("probe history cannot exceed the liquidity window")
-        if self.minimum_q25_daily_quote_volume > self.minimum_median_daily_quote_volume:
-            raise ValueError("q25 liquidity floor cannot exceed the median floor")
-        if self.minimum_daily_quote_volume > self.minimum_q25_daily_quote_volume:
-            raise ValueError("minimum daily liquidity cannot exceed the q25 floor")
-        if self.minimum_daily_trades > self.minimum_q25_daily_trades:
-            raise ValueError("minimum daily trades cannot exceed the q25 floor")
-        if self.minimum_q25_daily_trades > self.minimum_median_daily_trades:
-            raise ValueError("q25 daily trades cannot exceed the median floor")
         return self
 
     @property
@@ -101,19 +89,13 @@ class UniversePolicyConfig(BaseModel):
         return RollingPolicy(
             liquidity_window_days=self.liquidity_window_days,
             probe_minimum_complete_days=self.probe_minimum_complete_days,
-            minimum_median_daily_quote_volume=self.minimum_median_daily_quote_volume,
-            minimum_q25_daily_quote_volume=self.minimum_q25_daily_quote_volume,
-            minimum_daily_quote_volume=self.minimum_daily_quote_volume,
-            maximum_quote_volume_cv=self.maximum_quote_volume_cv,
-            minimum_median_daily_trades=self.minimum_median_daily_trades,
-            minimum_q25_daily_trades=self.minimum_q25_daily_trades,
-            minimum_daily_trades=self.minimum_daily_trades,
+            market_context_baseline_days=self.market_context_baseline_days,
+            market_context_change_ratio=self.market_context_change_ratio,
+            market_context_breadth_ratio=self.market_context_breadth_ratio,
+            market_context_minimum_instruments=self.market_context_minimum_instruments,
             liquidity_depth_samples=self.liquidity_depth_samples,
             liquidity_book_ticker_samples=self.liquidity_book_ticker_samples,
-            maximum_spread_bps=self.maximum_spread_bps,
-            minimum_thin_depth_10bps=self.minimum_thin_depth_10bps,
-            minimum_thin_depth_50bps=self.minimum_thin_depth_50bps,
-            depth_stable_candidate_count=self.depth_stable_candidate_count,
+            depth_mature_candidate_count=self.depth_mature_candidate_count,
             depth_probe_candidate_count=self.depth_probe_candidate_count,
             candidate_minimum_dwell_hours=self.candidate_minimum_dwell_hours,
             core_minimum_dwell_days=self.core_minimum_dwell_days,
@@ -123,7 +105,7 @@ class UniversePolicyConfig(BaseModel):
             core_entry_rank=self.core_entry_rank,
             core_retain_rank=self.core_retain_rank,
             boundary_retain_rank=self.boundary_retain_rank,
-            stable_pool_warning_size=self.stable_pool_warning_size,
+            mature_pool_warning_size=self.mature_pool_warning_size,
         )
 
 

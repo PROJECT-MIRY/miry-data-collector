@@ -70,7 +70,7 @@
     "XAUTUSDT"
   ],
   "probe_pool_count": 64,
-  "reason": "clean formal bootstrap refreshed after the previous frozen members failed current formal gates",
+  "reason": "formal 50/5/5 bootstrap frozen from the recorded source archive",
   "selector_reason": "formal_bootstrap",
   "source_archive_sha256": "27ca017040945f8627872725acf8b20e1590d1aef899089cacc7365a6599b999",
   "source_hashes": [
@@ -80,7 +80,6 @@
     "c17855ce802fac20a847fa493a184e3c1c157aa5e65ea7d949e62a0701fefab3",
     "5f7fbb070a7713c9f26d50a541cb1f36fa3c179deafc5cff2e137c23efb21fd1"
   ],
-  "stable_pool_count": 59,
   "universe_hash": "608e49c7199a3ab7cbc4c364c7126015ece7fbe4ccb9e9655de4204ede9ca22c",
   "universe_version": "7.0"
 }

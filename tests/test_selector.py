@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from universe_fixtures import formal_roles, liquidity_snapshot, symbols
 
+from ft_shadow_data_plane.central.cross_section import rank_cross_section
+from ft_shadow_data_plane.central.market_context import MarketState
 from ft_shadow_data_plane.central.selector import (
     RollingPolicy,
     select_bootstrap_universe,
@@ -26,7 +30,7 @@ def test_bootstrap_selects_fifty_five_five_from_complete_evidence() -> None:
     assert len(result.source_hashes) == 5
 
 
-def test_bootstrap_excludes_probe_without_fourteen_complete_days() -> None:
+def test_bootstrap_replaces_recent_candidate_without_complete_history() -> None:
     observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
 
     result = select_bootstrap_universe(
@@ -35,17 +39,35 @@ def test_bootstrap_excludes_probe_without_fourteen_complete_days() -> None:
     )
 
     assert "S069USDT" not in result.probe
-    assert "S000USDT" in result.probe
+    assert "S070USDT" in result.probe
 
 
-def test_bootstrap_fails_closed_when_trade_count_leaves_too_few_stable() -> None:
+def test_low_and_volatile_activity_are_ranked_instead_of_rejected() -> None:
     observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
 
-    with pytest.raises(ValueError, match="stable candidates"):
-        select_bootstrap_universe(
-            liquidity_snapshot(observed, low_trades=frozenset(symbols(0, 11))),
-            policy=RollingPolicy(),
-        )
+    result = select_bootstrap_universe(
+        liquidity_snapshot(
+            observed,
+            low_activity=frozenset({"S064USDT"}),
+            volatile_activity=frozenset({"S000USDT"}),
+        ),
+        policy=RollingPolicy(),
+    )
+
+    assert result.mature_pool_count == 65
+    assert "S000USDT" in result.core
+
+
+def test_wide_spread_and_shallow_depth_are_ranked_instead_of_rejected() -> None:
+    observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
+
+    result = select_bootstrap_universe(
+        liquidity_snapshot(observed, weak_market=frozenset({"S000USDT"})),
+        policy=RollingPolicy(),
+    )
+
+    assert result.mature_pool_count == 65
+    assert "S000USDT" not in result.core
 
 
 def test_monday_core_rotation_uses_robust_rank_and_hysteresis() -> None:
@@ -93,7 +115,7 @@ def test_boundary_hysteresis_uses_candidate_relative_top_ten() -> None:
     assert len(set(active.boundary) - set(result.boundary)) == 1
 
 
-def test_rolling_selection_fails_closed_when_stable_pool_cannot_fill_roles() -> None:
+def test_rolling_selection_freezes_when_active_evidence_is_incomplete() -> None:
     effective = datetime(2026, 8, 18, tzinfo=UTC)
     core, boundary, probe = formal_roles()
     active = _decision(core, boundary, probe, effective - timedelta(days=30))
@@ -102,8 +124,7 @@ def test_rolling_selection_fails_closed_when_stable_pool_cannot_fill_roles() -> 
         active,
         liquidity_snapshot(
             effective - timedelta(minutes=10),
-            inactive="S000USDT",
-            low_trades=frozenset(symbols(1, 12)),
+            missing_depth=frozenset({"S000USDT"}),
         ),
         effective_at=effective,
         member_since={symbol: effective - timedelta(days=30) for symbol in active.members},
@@ -116,8 +137,115 @@ def test_rolling_selection_fails_closed_when_stable_pool_cannot_fill_roles() -> 
         active.boundary,
         active.probe,
     )
-    assert result.inactive == ("S000USDT",)
-    assert result.stable_pool_count == 53
+    assert result.inactive == ()
+    assert result.mature_pool_count == 64
+    assert result.decision_frozen_reason == "active_member_evidence_incomplete:S000USDT"
+
+
+@pytest.mark.parametrize("activity_days", [1, 3])
+def test_broad_activity_shock_freezes_normal_rotation(activity_days: int) -> None:
+    effective = datetime(2026, 8, 17, tzinfo=UTC)
+    active = _decision(
+        tuple(sorted((*symbols(1, 50), "S064USDT"))),
+        symbols(50, 55),
+        symbols(65, 70),
+        effective - timedelta(days=30),
+    )
+
+    result = select_rolling_universe(
+        active,
+        liquidity_snapshot(
+            effective - timedelta(minutes=10),
+            activity_factor=2,
+            activity_days=activity_days,
+        ),
+        effective_at=effective,
+        member_since={symbol: effective - timedelta(days=30) for symbol in active.members},
+        core_since={symbol: effective - timedelta(days=30) for symbol in active.core},
+        policy=RollingPolicy(),
+    )
+
+    assert result.core == active.core
+    assert result.market_context is not None
+    assert result.market_context.state == MarketState.SHOCK_PENDING
+    assert result.market_context.horizon_days == activity_days
+    assert result.decision_frozen_reason == "market_activity_shock_pending"
+
+
+def test_seven_day_activity_shift_allows_normal_rotation() -> None:
+    effective = datetime(2026, 8, 17, tzinfo=UTC)
+    active = _decision(
+        tuple(sorted((*symbols(1, 50), "S064USDT"))),
+        symbols(50, 55),
+        symbols(65, 70),
+        effective - timedelta(days=30),
+    )
+
+    result = select_rolling_universe(
+        active,
+        liquidity_snapshot(
+            effective - timedelta(minutes=10), activity_factor=2, activity_days=7
+        ),
+        effective_at=effective,
+        member_since={symbol: effective - timedelta(days=30) for symbol in active.members},
+        core_since={symbol: effective - timedelta(days=30) for symbol in active.core},
+        policy=RollingPolicy(),
+    )
+
+    assert "S000USDT" in result.core
+    assert result.market_context is not None
+    assert result.market_context.state == MarketState.SHIFT_CONFIRMED
+    assert result.decision_frozen_reason is None
+
+
+def test_inactive_member_is_replaced_during_activity_shock() -> None:
+    effective = datetime(2026, 8, 18, tzinfo=UTC)
+    core, boundary, probe = formal_roles()
+    active = _decision(core, boundary, probe, effective - timedelta(days=30))
+
+    result = select_rolling_universe(
+        active,
+        liquidity_snapshot(
+            effective - timedelta(minutes=10),
+            inactive=boundary[0],
+            activity_factor=2,
+            activity_days=3,
+        ),
+        effective_at=effective,
+        member_since={symbol: effective - timedelta(days=30) for symbol in active.members},
+        core_since={symbol: effective - timedelta(days=30) for symbol in active.core},
+        policy=RollingPolicy(),
+    )
+
+    assert boundary[0] not in (*result.core, *result.boundary, *result.probe)
+    assert result.decision_frozen_reason == "market_activity_shock_pending"
+
+
+@dataclass(frozen=True)
+class _RankRow:
+    symbol: str
+    values: tuple[Decimal, ...]
+
+
+def test_cross_section_protects_weakest_dimension_and_is_deterministic() -> None:
+    rows = [
+        _RankRow("A", tuple(map(Decimal, (100, 100, 100, 100, 1)))),
+        _RankRow("B", tuple(map(Decimal, (80, 80, 80, 80, 80)))),
+        _RankRow("C", tuple(map(Decimal, (70, 70, 70, 70, 70)))),
+        _RankRow("D", tuple(map(Decimal, (60, 60, 60, 60, 60)))),
+        _RankRow("E", tuple(map(Decimal, (50, 50, 50, 50, 50)))),
+    ]
+    metrics = tuple(
+        (lambda row, index=index: row.values[index], True) for index in range(5)
+    )
+
+    forward = rank_cross_section(rows, symbol=lambda row: row.symbol, metrics=metrics)
+    reverse = rank_cross_section(
+        list(reversed(rows)), symbol=lambda row: row.symbol, metrics=metrics
+    )
+
+    assert forward[0].symbol == "B"
+    assert [row.symbol for row in forward] == [row.symbol for row in reverse]
 
 
 def _decision(

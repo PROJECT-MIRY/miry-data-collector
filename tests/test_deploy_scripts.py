@@ -108,6 +108,7 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert "cpus: 1.00" in compose
     assert "pids_limit: 256" in compose
     assert "--exit-code-from collector" in service
+    assert "SuccessExitStatus=130" in service
 
 
 @pytest.mark.parametrize(

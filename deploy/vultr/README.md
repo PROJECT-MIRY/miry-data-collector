@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.3.8 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.3.9 collector。数据根为
 `/srv/ft-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -19,7 +19,7 @@ timedatectl status
 
 ## 2. 安装目录和服务
 
-在 v0.3.8 仓库根目录执行：
+在 v0.3.9 仓库根目录执行：
 
 ```bash
 sudo ./deploy/vultr/install.sh
@@ -72,9 +72,9 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 ## 4. 配置正式 60 币和镜像
 
-`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.8 schema。核对三个角色为 50/5/5、
+`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.9 schema。核对三个角色为 50/5/5、
 `bootstrap_evidence_sha256` 与正式报告一致、`automation_enabled: true`、public shards 为 4，
-queue 为 64MiB。不要加入旧字段。
+queue 为 64MiB，并且 `public_symbol_load_weights` 恰好覆盖当前 60 币。不要加入旧字段。
 
 在 `/etc/ft-shadow-data-plane/edge.env` 中写 immutable digest：
 
@@ -96,7 +96,7 @@ docker image inspect "$EDGE_IMAGE" --format '{{json .RepoDigests}}'
 
 Compose 已固定 0.90 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
 
-## 5. v0.3.8 原地升级
+## 5. v0.3.9 原地升级
 
 本版本禁止 clean start。必须保留 raw、ready、writing、ACK、transfer ledger、gap、
 `formal-start.json` 和整个 `control/universe`。停止服务前记录权威状态：
@@ -104,7 +104,7 @@ Compose 已固定 0.90 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮�
 ```bash
 sudo systemctl stop ft-shadow-data-plane.service || true
 sudo cp -a /etc/ft-shadow-data-plane/edge.yaml \
-  /etc/ft-shadow-data-plane/edge.yaml.before-v0.3.8
+  /etc/ft-shadow-data-plane/edge.yaml.before-v0.3.9
 sudo sha256sum \
   /srv/ft-data-rsync/control/formal-start.json \
   /srv/ft-data-rsync/control/universe/active.json
@@ -182,8 +182,9 @@ journalctl -u ft-shadow-data-plane.service --since '24 hours ago' \
 池数量、market context 与冻结原因，`decisions` 保存实际 decision。mature 池小于 65 会报警。正常日切没有
 成员变化时不会出现计划 gap；若发生替换，gap 只应列出移除和新增币。
 
-正式完整性参数为：public stream 30 秒、`markPrice@1s` 5 秒、订阅集合审计 60 秒且响应 deadline
-10 秒、前一日 seal grace 90 秒、collector lease heartbeat 30 秒。订阅集合不一致、审计 ACK 超时、刷新后没有对应
+正式完整性参数为：public stream 30 秒、`markPrice@1s` 15 秒、订阅集合审计 60 秒、单次响应 deadline
+20 秒且连续 3 次无响应才重连、定向刷新连续 2 次失败才重连、前一日 seal grace 150 秒、collector
+lease heartbeat 30 秒。订阅集合不一致、连续审计无响应、刷新后没有对应
 stream 新事件、`pu/u` 不连续或异常重启都会留下 scoped gap。检查 lease 与 open gap：
 
 ```bash
@@ -255,7 +256,13 @@ collector status 周期，并确认 ready chunk 和 107 ACK 均持续推进。10
 升级后要求连续两次 107 `state=ok`，Vultr `transactions_pending=0`、`hash_mismatches=0`，并确认
 `REMOTE_GC` 持续出现。磁盘保护线使用 `minimum_free_bytes: 2147483648`。
 
-从 v0.3.7 升级 v0.3.8 只升级 Vultr，107 协议和 central 处理不变。禁止删除 raw、ready、ACK、
+从 v0.3.7 升级 v0.3.8 不执行第 5 节 clean start。先备份 `edge.yaml`、`edge.env`，记录 active
+universe、formal-start 哈希和 open gap；安装新部署脚本后，把示例中的 60 个
+`public_symbol_load_weights` 及可靠性参数合入现有配置，不能覆盖现有正式名单。更新 immutable
+image digest 后只执行一次受控重启。重启后要求 `7.0 / sequence 8`、60 币和哈希不变，所有 route
+完成 snapshot ready，open gap 回到 0，107 ACK 继续推进。107 不需要升级。
+
+从 v0.3.8 升级 v0.3.9 只升级 Vultr，107 协议和 central 处理不变。禁止删除 raw、ready、ACK、
 universe、gap 或 formal start；保留 active `7.0 / sequence 8`。按第 5 节替换选择器配置字段，
 更新 immutable image 后受控重启。首次 discovery 会补抓 35 日 Kline，因此耗时和 REST 请求数
 高于日常增量；完成后 evaluation 必须包含 `mature_pool_count`、`market_context` 和

@@ -182,6 +182,7 @@ class BinanceWebSocketConnection:
         on_event: Callable[[StreamType, str | None], None] | None = None,
         subscription_audit_seconds: float = 60.0,
         subscription_audit_timeout_seconds: float = 10.0,
+        subscription_audit_failures_before_reconnect: int = 1,
         transport_ready: asyncio.Event | None = None,
         transport_ready_keys: tuple[tuple[StreamType, str], ...] = (),
     ) -> None:
@@ -204,6 +205,9 @@ class BinanceWebSocketConnection:
         self._on_event = on_event or (lambda _stream, _symbol: None)
         self._subscription_audit_seconds = subscription_audit_seconds
         self._subscription_audit_timeout_seconds = subscription_audit_timeout_seconds
+        self._subscription_audit_failures_before_reconnect = (
+            subscription_audit_failures_before_reconnect
+        )
         self._transport_ready = (
             transport_ready if transport_ready is not None else asyncio.Event()
         )
@@ -225,6 +229,7 @@ class BinanceWebSocketConnection:
         active_subscriptions = set(self._subscriptions)
         subscription_proven_realtime_ns: int | None = None
         pending_audit_started: float | None = None
+        consecutive_audit_failures = 0
         try:
             async with connect(
                 self._url,
@@ -274,13 +279,31 @@ class BinanceWebSocketConnection:
                             )
                     except TimeoutError as exc:
                         if pending_audit_started is not None:
-                            raise SubscriptionAuditError(
-                                "subscription audit response was not received within "
-                                f"{self._subscription_audit_timeout_seconds:g}s",
-                                affected_from_realtime_ns=(
-                                    subscription_proven_realtime_ns or time.time_ns()
-                                ),
-                            ) from exc
+                            consecutive_audit_failures += 1
+                            pending_audits.clear()
+                            pending_audit_started = None
+                            if consecutive_audit_failures >= (
+                                self._subscription_audit_failures_before_reconnect
+                            ):
+                                raise SubscriptionAuditError(
+                                    "subscription audit response was not received within "
+                                    f"{self._subscription_audit_timeout_seconds:g}s "
+                                    f"for {consecutive_audit_failures} consecutive attempts",
+                                    affected_from_realtime_ns=(
+                                        subscription_proven_realtime_ns or time.time_ns()
+                                    ),
+                                ) from exc
+                            logger.warning(
+                                "subscription audit response missed connection_id=%s "
+                                "failures=%d threshold=%d; retrying",
+                                self._identity.connection_id,
+                                consecutive_audit_failures,
+                                self._subscription_audit_failures_before_reconnect,
+                            )
+                            if audit_task is not None:
+                                audit_task.cancel()
+                            audit_task = asyncio.create_task(asyncio.sleep(0))
+                            continue
                         raise TimeoutError(
                             "no websocket message for "
                             f"{self._receive_timeout_seconds:g}s "
@@ -327,12 +350,26 @@ class BinanceWebSocketConnection:
                                 update.completion.set_result(None)
                     if audit_task in done:
                         if pending_audits:
-                            raise SubscriptionAuditError(
-                                "subscription audit response was not received within "
-                                f"{self._subscription_audit_timeout_seconds:g}s",
-                                affected_from_realtime_ns=(
-                                    subscription_proven_realtime_ns or time.time_ns()
-                                ),
+                            consecutive_audit_failures += 1
+                            pending_audits.clear()
+                            pending_audit_started = None
+                            if consecutive_audit_failures >= (
+                                self._subscription_audit_failures_before_reconnect
+                            ):
+                                raise SubscriptionAuditError(
+                                    "subscription audit response was not received within "
+                                    f"{self._subscription_audit_timeout_seconds:g}s "
+                                    f"for {consecutive_audit_failures} consecutive attempts",
+                                    affected_from_realtime_ns=(
+                                        subscription_proven_realtime_ns or time.time_ns()
+                                    ),
+                                )
+                            logger.warning(
+                                "subscription audit response missed connection_id=%s "
+                                "failures=%d threshold=%d; retrying",
+                                self._identity.connection_id,
+                                consecutive_audit_failures,
+                                self._subscription_audit_failures_before_reconnect,
                             )
                         if not pending_updates:
                             subscription_id += 1
@@ -411,6 +448,7 @@ class BinanceWebSocketConnection:
                                         subscription_proven_realtime_ns or realtime_ns
                                     ),
                                 )
+                            consecutive_audit_failures = 0
                             subscription_proven_realtime_ns = realtime_ns
                         if isinstance(response_id, int) and response_id in pending_updates:
                             pending = pending_updates.pop(response_id)

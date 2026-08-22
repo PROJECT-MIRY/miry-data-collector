@@ -97,22 +97,85 @@ public_ws_url: wss://fstream.binance.com/public/stream
 market_ws_url: wss://fstream.binance.com/market/stream
 rest_url: https://fapi.binance.com
 public_connection_shards: 4
+public_symbol_load_weights:
+  1000BONKUSDT: 361
+  1000PEPEUSDT: 509
+  1000SHIBUSDT: 377
+  AAVEUSDT: 491
+  ACEUSDT: 556
+  ADAUSDT: 2300
+  ALLOUSDT: 228
+  APTUSDT: 412
+  ARBUSDT: 426
+  AVAXUSDT: 415
+  BANKUSDT: 373
+  BEATUSDT: 485
+  BNBUSDT: 3000
+  BSBUSDT: 238
+  BTCUSDT: 9300
+  CAPUSDT: 368
+  COTIUSDT: 502
+  CRVUSDT: 418
+  CYSUSDT: 379
+  DEXEUSDT: 376
+  DOGEUSDT: 8400
+  DOTUSDT: 393
+  ETCUSDT: 363
+  ETHUSDT: 16900
+  FARTCOINUSDT: 555
+  FETUSDT: 330
+  FILUSDT: 407
+  GIGGLEUSDT: 209
+  GRVTUSDT: 126
+  HBARUSDT: 425
+  HOMEUSDT: 262
+  HYPEUSDT: 525
+  ICPUSDT: 332
+  INJUSDT: 360
+  JTOUSDT: 247
+  KAITOUSDT: 327
+  LABUSDT: 506
+  LDOUSDT: 234
+  LINKUSDT: 4500
+  LITUSDT: 487
+  LTCUSDT: 2300
+  NEARUSDT: 465
+  ONDOUSDT: 385
+  PAXGUSDT: 273
+  PENGUUSDT: 446
+  PUMPUSDT: 7100
+  REUSDT: 321
+  SOLUSDT: 4100
+  SUIUSDT: 3500
+  TAOUSDT: 460
+  TRXUSDT: 456
+  UNIUSDT: 432
+  WLDUSDT: 413
+  WLFIUSDT: 395
+  XAUTUSDT: 229
+  XLMUSDT: 503
+  XMRUSDT: 384
+  XPLUSDT: 413
+  XRPUSDT: 8500
+  ZECUSDT: 6300
 connection_rotation_seconds: 82800
 connection_overlap_seconds: 15
 websocket_receive_timeout_seconds: 30
 websocket_ping_interval_seconds: 20
 websocket_ping_timeout_seconds: 20
 subscription_audit_seconds: 60
-subscription_audit_timeout_seconds: 10
-websocket_max_queue: 4
+subscription_audit_timeout_seconds: 20
+subscription_audit_failures_before_reconnect: 3
+refresh_failures_before_reconnect: 2
+websocket_max_queue: 16
 websocket_max_message_bytes: 2097152
 public_stream_liveness_seconds: 30
-mark_price_liveness_seconds: 5
-day_seal_grace_seconds: 90
+mark_price_liveness_seconds: 15
+day_seal_grace_seconds: 150
 lease_heartbeat_seconds: 30
 open_interest_interval_seconds: 30
 clock_sample_interval_seconds: 60
-snapshot_request_interval_seconds: 2.0
+snapshot_request_interval_seconds: 1.0
 queue_max_bytes: 67108864
 queue_warn_ratio: 0.70
 queue_resume_ratio: 0.50

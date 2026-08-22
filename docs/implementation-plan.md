@@ -1,9 +1,9 @@
-# v0.3.8 正式采集实施合同
+# v0.3.9 正式采集实施合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.3.8 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.3.9 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -85,17 +85,17 @@ seal；它不停止或重建任何 Binance 连接，也不产生 `PLANNED_BOUNDA
 core 出现计划中断。
 
 WebSocket 30 秒无任何消息会重连整个异常连接。每个币的 `depth` 与 `bookTicker` 分别以 30 秒
-保守阈值监控，`markPrice@1s` 以 5 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已
-证明事件时刻打开 symbol/stream-scoped `CONNECTION_LOST_GAP`。控制 ACK 使用独立 10 秒 deadline，
+保守阈值监控，`markPrice@1s` 以 15 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已
+证明事件时刻打开 symbol/stream-scoped `CONNECTION_LOST_GAP`。控制 ACK 使用独立 20 秒 deadline，
 snapshot completion 最长等待 180 秒；ACK 不代表恢复，必须看到对应 stream 的第一条新事件才关闭
-scoped gap，L2 validity 还必须等待 snapshot bridge。局部恢复失败时只重建所属 route，并为该 route
+scoped gap，L2 validity 还必须等待 snapshot bridge。同一活跃连接连续两次局部恢复失败时才重建所属 route，并为该 route
 被主动中断的全部 symbol/stream 打开 transport gap；其他 route、REST poller 和 writer 继续工作。
-每条连接每 60 秒执行一次 `LIST_SUBSCRIPTIONS`，响应 deadline 为 10 秒；集合不一致或审计响应自身
-超时都使当前 route 连接失败，gap 从上一次成功审计的 proof timestamp 起算。`aggTrade`、`forceOrder` 和
+每条连接每 60 秒执行一次 `LIST_SUBSCRIPTIONS`，单次响应 deadline 为 20 秒；集合不一致立即失败，
+但无响应必须连续发生 3 次才使当前 route 连接失败，gap 从上一次成功审计的 proof timestamp 起算。`aggTrade`、`forceOrder` 和
 `contractInfo` 因天然稀疏不使用事件 deadline。L2 `pu/u` 不连续时单独记录
 `L2_SEQUENCE_GAP` 并重新取 snapshot。
 
-前一日 seal 延迟 90 秒，确保 30/60 秒监控发现的 affected interval 能先进入 day inventory。
+前一日 seal 延迟 150 秒，确保 30/60/120 秒监控发现的 affected interval 能先进入 day inventory。
 collector 每 30 秒写 lease；若上次启动没有 clean shutdown，下次启动会从 depth 与 market/trades
 共同 durable watermark 打开 recovered `COLLECTOR_STOPPED_GAP`，直到全部 source ready 才关闭。
 
@@ -135,7 +135,9 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 目标机器为 1 vCPU、1GiB RAM、25GB 磁盘，不允许通过减少币数或降低采集频率达标。
 
 - Docker：`0.90 CPU`、`768MiB`、`256 PIDs`；
-- 4 个稳定 hash public shards，WebSocket queue 为 4，单消息上限 2MiB；
+- 4 个稳定加权 public shards，初始按生产消息率最小负载分配，成员未变化时不跨 route 搬迁；
+- WebSocket queue 为 16，单消息上限 2MiB；
+- 1,000 档 snapshot 全局最小间隔 1 秒，持续上限约 1,200 request-weight/min；
 - raw queue 总字节上限 64MiB，70% 告警，50% 恢复；
 - writer batch 上限 2000 events 或 2MiB；
 - RSS p95 不超过 600MiB，峰值不超过 700MiB，无 OOM；

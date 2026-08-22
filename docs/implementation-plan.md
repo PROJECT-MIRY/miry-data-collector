@@ -1,10 +1,10 @@
-# v0.3.7 正式采集实施合同
+# v0.3.8 正式采集实施合同
 
 ## 本阶段目标
 
-本版本就是正式实验采集版本。Vultr 从空的 active 路径启动，不读取、转换或迁移旧 generation
-状态。107 保留旧 raw 的原始字节，新 runtime 只按新 formal-start 处理后续日期。`7.0` 一次启动
-全部 60 个合约，不存在分级扩容配置。
+本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.3.8 上线本身不触发重选，只有新的每日
+完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
 ACK，并把重计算提交给 Slurm。正式采集过程中不依赖 GitHub，也不依赖 107 回传选币决策。
@@ -16,28 +16,33 @@ ACK，并把重计算提交给 Slurm。正式采集过程中不依赖 GitHub，�
 - `probe` 固定 5 个槽位，代表最新上市的合格永续合约；
 - 三个角色始终互斥，总数始终等于 60。
 
-新 `7.0` 由 [冻结证据](formal-universe-7.0-evidence.json) 记录，并在首次
-启动必须用新的双重状态、14 日 Kline 和盘口证据验证已冻结的 50/5/5 全部仍通过角色硬门槛，
-并同时绑定离线 evidence hash 与实时 source hashes。任何成员失效或不再合格就拒绝写正式
-起点；瞬时盘口导致的合格成员内部排名变化不会擅自改写冻结名单。
+`7.0` 的历史身份由 [冻结证据](formal-universe-7.0-evidence.json) 记录。该文件只绑定名单、版本、
+source hashes 和 universe hash，不再携带已经删除的绝对流动性门槛。正式运行以持久化的
+`active.json` 为权威，升级不得改写该 decision。
 
 Vultr 每天 `23:50 UTC` 用两次 `exchangeInfo` 包围完整证据抓取。只有两次响应都为
-`TRADING` 的 USDT 保证金、USDT 报价永续合约才合格。历史流动性来自完整 UTC 日 Kline，
-当天未结束的 Kline 永不进入决策。首次抓 14 日，随后从已落盘证据增量追加刚结束的一日。
-当前可采集性由 5 次全市场 bookTicker 和稳健 Top200 与最新 100 并集的 3 次 depth 验证。
-原始内容、时间和 SHA-256 都写入 decision evidence 和 raw metadata。
+`TRADING` 的 USDT 保证金、USDT 报价永续合约才合格。历史活跃度来自完整 UTC 日 Kline，
+当天未结束的 Kline 永不进入决策。首次抓 35 日，随后从已落盘证据增量追加刚结束的一日；
+最近 14 日用于单币排名，前 28 日与最近 1/3/7 日用于市场状态。盘口证据覆盖活跃度预排的
+mature Top200、recent Top100 和当前 active 60 的并集，采集 5 次全市场 bookTicker 与 3 次
+`limit=100` depth。原始内容、时间和 SHA-256 都写入 decision evidence 和 raw metadata。
+
+硬拒绝只用于技术资格和证据有效性：角色要求的完整 UTC 日齐备；bookTicker/depth 样本数量、
+数值和盘口结构可解析。成交额、交易数、点差和两档 depth 不设绝对流动性门槛，也不存在 CV
+门槛。
 
 ## 自动轮换
 
 候选角色每天 `00:00 UTC` 生效：
 
-- core/boundary 使用最近 14 个完整 UTC 日；probe 上市后至少有 7/7 个完整 UTC 日；
-- 每日成交额要求中位数 `>=10M`、P25 `>=5M`、最小值 `>=3M USDT`、CV `<=1.2`；
-- 每日交易数要求中位数 `>=100K`、P25 `>=50K`、最小值 `>=25K`；
-- 5 次 bookTicker 与 3 次 depth 最大点差 `<=10 bps`，depth 较薄侧
-  `+/-10 bps >=800`、`+/-50 bps >=10K USDT`；
-- boundary 目标为非 core、非 probe 的 Top5，现有成员在 Top10 内可保留；
-- probe 在通过全部门槛的合约中优先最新上市者；
+- core/boundary 使用最近 14 个完整 UTC 日且上市至少 30 日；probe 优先在上市不足 30 日、至少
+  有 7 个完整日的 recent cohort 内排名，人数不足时才按上市时间从年轻的 mature 合约补足储备；
+- 每个池分别对 P25 quote volume、P25 trades、10 bps 较薄侧 depth、50 bps 较薄侧 depth
+  降序排名，对最差点差升序排名；
+- 聚合顺序为“最差单项名次、名次总和、五项名次元组、symbol”，防止一个极强指标掩盖另一项
+  极弱指标，同时保持结果确定；
+- mature 横截面 Top50 为 core，其后候选用于 boundary；recent 横截面最优者用于 probe；
+- boundary 目标为非 core、非 probe 的 Top5，现有成员在候选相对 Top10 内可保留；
 - 正常情况下每天最多替换 2 个币，boundary 和 probe 各最多 1 个；
 - candidate 成员至少停留 48 小时；
 - 两次状态请求确认停止交易后，允许为恢复可采集性进行强制替换。
@@ -50,8 +55,15 @@ core 只在周一 `00:00 UTC` 评估：
 - 每周最多替换 5 个 core；
 - 已被两次状态请求确认停止交易的 core 可优先替换。
 
-合格 stable 池少于 65 时报警。任何角色候选不足都 fail closed：保留当前采集、记录评估并
-报警，不自动放宽门槛、不产出少于 60 个成员的 decision。
+mature 证据池少于 65 时报警。任何角色证据或候选不足都 fail closed：保留当前 60 币并记录
+评估，不产出残缺 decision。当前 active 成员缺少角色所需证据时同样冻结，不把抓取失败解释成
+流动性恶化；两次状态确认的停止交易成员走强制替换。
+
+市场状态由固定完整面板独立计算。以前 28 日为基线，quote volume 与 trade count 必须同方向，
+横截面中位变化达到 `1.25x` 或 `0.8x` 且各自同方向 breadth 至少 70% 才算广泛变化。1 日或
+持续 3 日输出 `ACTIVITY_SHOCK_PENDING`，冻结非必要轮换；持续 7 日输出
+`ACTIVITY_SHIFT_CONFIRMED`，恢复正常评估。停牌替换不受 pending 冻结影响。市场状态只节流
+轮换，不直接指定任何单币进出。
 
 每次评估都写 evaluation。成员变化时写带结构化 universe 版本、角色、证据 hash、原因、
 `effective_at` 和 `universe_hash` 的 decision。版本不是浮点数：50 个 core 变化时

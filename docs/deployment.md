@@ -1,4 +1,4 @@
-# v0.3.7 端到端部署顺序
+# v0.3.8 端到端部署顺序
 
 正式链路必须按以下顺序上线，避免 collector 产生数据后没有可用的异地持久化端。
 
@@ -13,7 +13,7 @@
 9. 确认 Vultr `ready/` 出现 chunk、107 `data/raw` 出现同一 chunk、Vultr 收到 ACK；
 10. 连续观察 24 小时资源指标、gap、ACK 延迟和剩余磁盘。
 
-v0.3.7 启动后必须确认日志没有持续的 `subscription audit`、`targeted subscription recovery incomplete`
+v0.3.8 启动后必须确认日志没有持续的 `subscription audit`、`targeted subscription recovery incomplete`
 或 writer failure，
 `control/collector-lease.json` 为当前 boot 的 `RUNNING`，且每分钟 ACK/ready 数量有进展。一次受控重启
 应产生并在全源 ready 后关闭 `COLLECTOR_STOPPED_GAP`；不能通过删 gap 文件来获得质量通过。
@@ -54,5 +54,6 @@ control/evidence/gap 保存到只读 archive。确认 archive 完整后才重置
 
 v0.3.6 在 v0.3.5 clean-start 合同上增加 107 sealed-day 幂等快速路径。首次发布 sealed day 仍验证
 全部 chunk 大小与 SHA-256；之后只有本地 `SEALED.json` 与远端逐字节一致才跳过历史 raw 重哈希。
-正式部署时 107 与 Vultr 统一使用 v0.3.7 release。两端 ACK 状态与故障恢复验收见
+ACK 协议和 107 central 仍使用 v0.3.7 合同；v0.3.8 只替换 Vultr edge 与 universe 配置，不要求
+107 升级。保留 active `7.0 / sequence 8`、formal start 和全部数据状态。两端 ACK 状态与故障恢复验收见
 [ACK 传输审计合同](transfer-ack-observability.md)。

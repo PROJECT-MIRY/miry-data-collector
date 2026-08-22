@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.3.9 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.3.10 collector。数据根为
 `/srv/ft-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -19,7 +19,7 @@ timedatectl status
 
 ## 2. 安装目录和服务
 
-在 v0.3.9 仓库根目录执行：
+在 v0.3.10 仓库根目录执行：
 
 ```bash
 sudo ./deploy/vultr/install.sh
@@ -72,7 +72,7 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 ## 4. 配置正式 60 币和镜像
 
-`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.9 示例。核对三个角色为 50/5/5、
+`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.10 schema。核对三个角色为 50/5/5、
 `bootstrap_evidence_sha256` 与正式报告一致、`automation_enabled: true`、public shards 为 4，
 queue 为 64MiB，并且 `public_symbol_load_weights` 恰好覆盖当前 60 币。不要加入旧字段。
 
@@ -96,32 +96,36 @@ docker image inspect "$EDGE_IMAGE" --format '{{json .RepoDigests}}'
 
 Compose 已固定 1.00 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
 
-## 5. v0.3.8 clean start
+## 5. v0.3.10 原地升级
 
-只有在 collector 已停止、107 已经拉到 `new_chunks=0 failures=0`，且旧 control/evidence/gap tar
-已传到 107 并通过 SHA-256 校验后执行。Vultr 容量不足以长期保留第二份 spool，因此远端 active
-路径会重置，但旧实验的唯一归档保留在 107。以下删除不可恢复，目标必须逐项等于显示值：
+本版本禁止 clean start。必须保留 raw、ready、writing、ACK、transfer ledger、gap、
+`formal-start.json` 和整个 `control/universe`。停止服务前记录权威状态：
 
 ```bash
 sudo systemctl stop ft-shadow-data-plane.service || true
-for path in \
-  /srv/ft-data-rsync/ready \
-  /srv/ft-data-rsync/writing \
-  /srv/ft-data-rsync/control
-do
-  readlink -f "$path"
-done
+sudo cp -a /etc/ft-shadow-data-plane/edge.yaml \
+  /etc/ft-shadow-data-plane/edge.yaml.before-v0.3.10
+sudo sha256sum \
+  /srv/ft-data-rsync/control/formal-start.json \
+  /srv/ft-data-rsync/control/universe/active.json
+sudo jq '{core_generation,candidate_revision,decision_sequence,
+          universe_version,universe_hash}' \
+  /srv/ft-data-rsync/control/universe/active.json
 ```
 
-人工核对输出后，删除且只删除这三个目录，再重新运行 installer：
+安装新 deploy 文件后，只清理旧选择器配置字段并加入新字段；不要覆盖 50/5/5 名单、版本号和
+bootstrap hash：
 
 ```bash
-sudo rm -rf -- \
-  /srv/ft-data-rsync/ready \
-  /srv/ft-data-rsync/writing \
-  /srv/ft-data-rsync/control
 sudo ./deploy/vultr/install.sh
+sudoedit /etc/ft-shadow-data-plane/edge.yaml
 ```
+
+`universe` 配置应包含 `market_context_baseline_days: 28`、
+`market_context_change_ratio: 1.25`、`market_context_breadth_ratio: 0.70`、
+`market_context_minimum_instruments: 60`、`depth_mature_candidate_count: 200` 和
+`mature_pool_warning_size: 65`。edge 配置还必须包含 `snapshot_request_interval_seconds: 0.75` 和
+`snapshot_request_concurrency: 4`。Pydantic 拒绝未知字段，因此旧选择器字段必须删除干净。
 
 ## 6. 验证和启动
 
@@ -145,11 +149,9 @@ journalctl -u ft-shadow-data-plane.service -f
 FORMAL_COLLECTION_STARTED ... universe_version=<major.revision> decision_sequence=<n> symbols=60
 ```
 
-clean start 时 collector 会用最新 14 个完整 UTC 日、5 次 bookTicker 和 3 次 depth 验证冻结的
-`7.0 / sequence 8`；初始化不会读取任何旧 active、pending 或 generation 文件。
-若两次状态请求发现非交易合约，或任何已配置成员跌破角色硬门槛，它会拒绝写正式标记并退出。
-合格池内部因瞬时盘口产生的排名变化不会改写冻结名单。失败时必须重新冻结证据和配置，再执行
-clean start；不要绕过检查或减少总数。
+原地升级读取原有 `7.0 / sequence 8`，不会重新写 formal start。首次 discovery 补齐 35 个完整
+UTC 日后才评估；缺证据或 market context pending 时保持当前名单。成交额、交易数、点差和 depth
+仅参与横截面排名，不再触发绝对门槛拒绝。
 
 同时确认：
 
@@ -177,8 +179,8 @@ journalctl -u ft-shadow-data-plane.service --since '24 hours ago' \
   | grep -E 'GAP|collector status|FORMAL_COLLECTION_STARTED|planned universe'
 ```
 
-`control/universe/observations` 保存每日增量 Kline 和盘口证据，`evaluations` 保存 stable/probe
-池数量与每次评估，`decisions` 保存实际 decision。stable 池小于 65 会报警。正常日切没有
+`control/universe/observations` 保存每日增量 Kline 和盘口证据，`evaluations` 保存 mature/recent
+池数量、market context 与冻结原因，`decisions` 保存实际 decision。mature 池小于 65 会报警。正常日切没有
 成员变化时不会出现计划 gap；若发生替换，gap 只应列出移除和新增币。
 
 正式完整性参数为：public stream 30 秒、`markPrice@1s` 15 秒、订阅集合审计 60 秒、单次响应 deadline
@@ -261,9 +263,18 @@ universe、formal-start 哈希和 open gap；安装新部署脚本后，把示�
 image digest 后只执行一次受控重启。重启后要求 `7.0 / sequence 8`、60 币和哈希不变，所有 route
 完成 snapshot ready，open gap 回到 0，107 ACK 继续推进。107 不需要升级。
 
-从 v0.3.8 升级 v0.3.9 同样禁止 clean start，且不改 107。先记录 active universe、formal-start
+从 v0.3.8 升级 v0.3.9 只升级 Vultr，107 协议和 central 处理不变。禁止删除 raw、ready、ACK、
+universe、gap 或 formal start；保留 active `7.0 / sequence 8`。按第 5 节替换选择器配置字段，
+更新 immutable image 后受控重启。首次 discovery 会补抓 35 日 Kline，因此耗时和 REST 请求数
+高于日常增量；完成后 evaluation 必须包含 `mature_pool_count`、`market_context` 和
+`decision_frozen_reason`，且不得仅因升级创建新的 pending decision。
+
+从 v0.3.9 升级 v0.3.10 同样禁止 clean start，且不改 107。先记录 active universe、formal-start
 哈希、open gap、ready 和 ACK 计数；只安装新部署脚本，把现有 `edge.yaml` 的
 `snapshot_request_interval_seconds` 改为 `0.75` 并新增 `snapshot_request_concurrency: 4`，然后把
-`EDGE_IMAGE` 更新为 v0.3.9 immutable digest。只允许一次受控重启，保留 raw、ready、writing、
+`EDGE_IMAGE` 更新为 v0.3.10 immutable digest。只允许一次受控重启，保留 raw、ready、writing、
 ACK、universe、gap、lease 和 formal-start。重启后全部 route 的 snapshot scheduling 应在约
 13 秒内完成；网络 HTTP 尾延迟仍可能延长单币 bridge，但不得重新形成全局串行等待。
+
+从 v0.3.8 可直接升级 v0.3.10：同一次停机内先按第 5 节替换 v0.3.9 的选择器字段，再加入上述
+snapshot 参数，最后只启动一次 v0.3.10；不得先后启动两个中间版本。

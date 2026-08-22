@@ -286,9 +286,9 @@ async def test_daily_kline_evidence_appends_only_the_new_complete_day(
         exchange_info, datetime(2026, 8, 18, 23, 50, tzinfo=UTC)
     )
 
-    assert [value["limit"] for value in rest.params] == [14, 1]
+    assert [value["limit"] for value in rest.params] == [35, 1]
     payload = orjson.loads(second)
-    assert len(payload["symbols"]["BTCUSDT"]["payload"]) == 14
+    assert len(payload["symbols"]["BTCUSDT"]["payload"]) == 35
     assert [event.stream_type for event in ingest.events] == [
         StreamType.DAILY_KLINES,
         StreamType.DAILY_KLINES,

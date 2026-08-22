@@ -966,6 +966,7 @@ class RestPollers:
                 validation_symbols = liquidity_validation_symbols(
                     exchange_info,
                     daily_klines,
+                    tracked=tuple(sorted(self._instruments)),
                     policy=self._config.universe.rolling_policy(),
                 )
                 liquidity_depth = await self._fetch_liquidity_depth(validation_symbols)
@@ -1013,7 +1014,11 @@ class RestPollers:
     async def _fetch_daily_klines(self, exchange_info: bytes, observed_at: datetime) -> bytes:
         cutoff = datetime.combine(observed_at.date(), datetime.min.time(), UTC)
         cutoff_ms = int(cutoff.timestamp() * 1000)
-        start_ms = cutoff_ms - self._config.universe.liquidity_window_days * 86_400_000
+        evidence_days = max(
+            self._config.universe.liquidity_window_days,
+            self._config.universe.market_context_baseline_days + 7,
+        )
+        start_ms = cutoff_ms - evidence_days * 86_400_000
         cached = self._cached_daily_klines()
         responses: dict[str, dict[str, object]] = {}
         for symbol, onboard_ms in _eligible_instruments(exchange_info).items():
@@ -1056,7 +1061,7 @@ class RestPollers:
             responses[symbol] = {
                 "payload": [by_open[open_ms] for open_ms in sorted(by_open)],
                 "source_response_sha256s": list(dict.fromkeys(source_hashes))[
-                    -(self._config.universe.liquidity_window_days + 1) :
+                    -(evidence_days + 1) :
                 ],
             }
         evidence = canonical_json_bytes(

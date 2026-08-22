@@ -121,11 +121,12 @@ class UniverseStore:
             core_since=self._core_since,
             policy=self._policy.rolling_policy(),
         )
+        self._write_evaluation(result, now=now, effective_at=effective_at, kind="rolling")
         if not self._policy.automation_enabled:
+            self._pending_path.unlink(missing_ok=True)
             logger.info("automatic universe decisions are paused by configuration")
             return None
         reason = _decision_reason(self.active, result, effective_at)
-        self._write_evaluation(result, now=now, effective_at=effective_at, kind="rolling")
         if (
             result.core == self.active.core
             and result.boundary == self.active.boundary
@@ -159,11 +160,11 @@ class UniverseStore:
         effective_at: datetime,
         kind: str,
     ) -> None:
-        if result.stable_pool_count < self._policy.stable_pool_warning_size:
+        if result.mature_pool_count < self._policy.mature_pool_warning_size:
             logger.warning(
-                "qualified stable pool below reserve target count=%d target=%d",
-                result.stable_pool_count,
-                self._policy.stable_pool_warning_size,
+                "mature evidence pool below reserve target count=%d target=%d",
+                result.mature_pool_count,
+                self._policy.mature_pool_warning_size,
             )
         evaluation = {
             "active_core_generation": self.active.core_generation,
@@ -176,11 +177,22 @@ class UniverseStore:
             "evaluated_at": now.isoformat(),
             "inactive": list(result.inactive),
             "kind": kind,
+            "decision_frozen_reason": result.decision_frozen_reason,
+            "mature_pool_count": result.mature_pool_count,
             "probe": list(result.probe),
             "probe_pool_count": result.probe_pool_count,
             "source_hashes": list(result.source_hashes),
-            "stable_pool_count": result.stable_pool_count,
         }
+        if result.market_context is not None:
+            evaluation["market_context"] = {
+                "horizon_days": result.market_context.horizon_days,
+                "panel_count": result.market_context.panel_count,
+                "quote_volume_breadth": str(result.market_context.quote_volume_breadth),
+                "quote_volume_factor": str(result.market_context.quote_volume_factor),
+                "state": result.market_context.state.value,
+                "trade_count_breadth": str(result.market_context.trade_count_breadth),
+                "trade_count_factor": str(result.market_context.trade_count_factor),
+            }
         evaluation_name = f"{now.strftime('%Y%m%dT%H%M%S.%fZ')}.evaluation.json"
         atomic_write_bytes(self._evaluations / evaluation_name, canonical_json_bytes(evaluation))
 
@@ -218,7 +230,7 @@ class UniverseStore:
 
     def _select_due(self, now: datetime) -> tuple[UniverseDecision, Path] | None:
         candidates: list[tuple[UniverseDecision, Path]] = []
-        if self._pending_path.exists():
+        if self._policy.automation_enabled and self._pending_path.exists():
             pending = UniverseDecision.model_validate_json(self._pending_path.read_bytes())
             if (
                 pending.decision_sequence > self.active.decision_sequence

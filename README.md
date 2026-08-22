@@ -1,6 +1,6 @@
 # ft-shadow-data-plane
 
-Binance USD-M 正式数据采集与重建流水线。v0.3.9 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.3.10 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 ```text
@@ -77,9 +77,14 @@ v0.3.8 针对 1C1G 正式采集器的重连风暴做生产优化：public route 
 处理合同不变。诊断、容量依据与验收见
 [v0.3.8 collector 可靠性记录](docs/v0.3.8-collector-reliability-2026-08-23.md)。
 
-v0.3.9 保留 v0.3.8 的路由均衡和恢复门禁，把 L2 snapshot 调度从“限速锁覆盖整个 HTTP 请求”
-改成“只预约请求起点”：全局每 0.75 秒启动一个 1,000 档 snapshot，同时最多允许 4 个慢 HTTP
-在途，恢复队列存在时暂停低优先级 discovery REST。这样仍把 snapshot 控制在约 1,600
-weight/min，且 4 个 route 同时恢复时不再因单个慢请求把所有 symbol 串行阻塞。正式名单、raw、
-rsync/ACK 和 107 合同不变。设计与验收见
-[v0.3.9 snapshot 调度记录](docs/v0.3.9-snapshot-scheduler-2026-08-23.md)。
+v0.3.9 删除成交额、交易数、CV、点差和 depth 的绝对选币门槛，改为五指标横截面最弱项优先
+排名。独立 market context 使用 28 日基线与最近 1/3/7 日识别广泛活动冲击：pending 时冻结
+普通轮换，7 日确认后恢复评估，停牌替换仍立即执行。升级保留正式 `7.0`、raw、ACK、gap 与
+formal start，首次 35 日证据完整前不会改变名单。
+
+v0.3.10 保留 v0.3.8 的路由均衡和恢复门禁以及 v0.3.9 的选币规则，把 L2 snapshot 调度从
+“限速锁覆盖整个 HTTP 请求”改成“只预约请求起点”：全局每 0.75 秒启动一个 1,000 档
+snapshot，同时最多允许 4 个慢 HTTP 在途，恢复队列存在时暂停低优先级 discovery REST。这样
+仍把 snapshot 控制在约 1,600 weight/min，且 4 个 route 同时恢复时不再因单个慢请求把所有
+symbol 串行阻塞。正式名单、raw、rsync/ACK 和 107 合同不变。设计与验收见
+[v0.3.10 snapshot 调度记录](docs/v0.3.10-snapshot-scheduler-2026-08-23.md)。

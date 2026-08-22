@@ -42,7 +42,7 @@ def test_formal_bootstrap_validates_members_and_binds_live_sources(tmp_path: Pat
     assert (tmp_path / "control/universe/evaluations").is_dir()
 
 
-def test_formal_bootstrap_rejects_configured_members_that_fail_live_gates(
+def test_formal_bootstrap_rejects_configured_members_without_complete_evidence(
     tmp_path: Path,
 ) -> None:
     now = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
@@ -50,9 +50,9 @@ def test_formal_bootstrap_rejects_configured_members_that_fail_live_gates(
     store = UniverseStore(tmp_path, _policy())
     store.initialize(now)
 
-    with pytest.raises(ValueError, match="fail current formal liquidity gates"):
+    with pytest.raises(ValueError, match="lack complete cross-sectional evidence"):
         store.observe_and_plan(
-            liquidity_snapshot(now, low_trades=frozenset({core[0]})), now=now
+            liquidity_snapshot(now, missing_depth=frozenset({core[0]})), now=now
         )
 
     assert core == store.active.core
@@ -88,6 +88,29 @@ def test_unchanged_members_do_not_create_a_new_version(tmp_path: Path) -> None:
     assert decision is None
     assert store.active == active
     assert not (tmp_path / "control/universe/pending.json").exists()
+
+
+def test_disabled_automation_records_evaluation_and_discards_stale_pending(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 8, 18, 23, 50, tzinfo=UTC)
+    enabled = UniverseStore(tmp_path, _policy())
+    active = enabled.initialize(now - timedelta(days=3))
+    (tmp_path / "control/formal-start.json").write_text("{}", encoding="ascii")
+    pending = enabled.observe_and_plan(
+        liquidity_snapshot(now, inactive=active.boundary[0]), now=now
+    )
+    assert pending is not None
+
+    disabled = UniverseStore(tmp_path, _policy(automation_enabled=False))
+    disabled.initialize(now)
+    assert disabled.observe_and_plan(liquidity_snapshot(now), now=now) is None
+
+    evaluation_paths = list((tmp_path / "control/universe/evaluations").glob("*.json"))
+    assert evaluation_paths
+    assert not (tmp_path / "control/universe/pending.json").exists()
+    assert disabled.apply_due(datetime(2026, 8, 19, tzinfo=UTC)) is None
+    assert disabled.active == active
 
 
 def test_core_and_candidate_changes_advance_separate_version_components() -> None:
@@ -142,7 +165,7 @@ def test_candidate_override_cli_leaves_version_allocation_to_edge(
     assert "generation" not in override
 
 
-def _policy() -> UniversePolicyConfig:
+def _policy(*, automation_enabled: bool = True) -> UniversePolicyConfig:
     core, boundary, probe = formal_roles()
     return UniversePolicyConfig(
         experiment_id="formal-test-60",
@@ -150,4 +173,5 @@ def _policy() -> UniversePolicyConfig:
         core=core,
         boundary=boundary,
         probe=probe,
+        automation_enabled=automation_enabled,
     )

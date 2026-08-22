@@ -9,6 +9,14 @@ from typing import Any
 
 import orjson
 
+from ft_shadow_data_plane.central.cross_section import rank_cross_section
+from ft_shadow_data_plane.central.market_context import (
+    CONFIRMATION_DAYS,
+    ActivitySeries,
+    MarketContext,
+    MarketState,
+    evaluate_market_context,
+)
 from ft_shadow_data_plane.contracts.models import SYMBOL_PATTERN, UniverseDecision
 from ft_shadow_data_plane.contracts.serde import (
     atomic_write_bytes,
@@ -25,19 +33,13 @@ FIFTY_BPS = Decimal("0.005")
 class RollingPolicy:
     liquidity_window_days: int = 14
     probe_minimum_complete_days: int = 7
-    minimum_median_daily_quote_volume: Decimal = Decimal("10000000")
-    minimum_q25_daily_quote_volume: Decimal = Decimal("5000000")
-    minimum_daily_quote_volume: Decimal = Decimal("3000000")
-    maximum_quote_volume_cv: Decimal = Decimal("1.2")
-    minimum_median_daily_trades: int = 100_000
-    minimum_q25_daily_trades: int = 50_000
-    minimum_daily_trades: int = 25_000
+    market_context_baseline_days: int = 28
+    market_context_change_ratio: Decimal = Decimal("1.25")
+    market_context_breadth_ratio: Decimal = Decimal("0.70")
+    market_context_minimum_instruments: int = 60
     liquidity_depth_samples: int = 3
     liquidity_book_ticker_samples: int = 5
-    maximum_spread_bps: Decimal = Decimal("10")
-    minimum_thin_depth_10bps: Decimal = Decimal("800")
-    minimum_thin_depth_50bps: Decimal = Decimal("10000")
-    depth_stable_candidate_count: int = 200
+    depth_mature_candidate_count: int = 200
     depth_probe_candidate_count: int = 100
     candidate_minimum_dwell_hours: int = 48
     core_minimum_dwell_days: int = 14
@@ -47,7 +49,7 @@ class RollingPolicy:
     core_entry_rank: int = 45
     core_retain_rank: int = 55
     boundary_retain_rank: int = 10
-    stable_pool_warning_size: int = 65
+    mature_pool_warning_size: int = 65
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +82,10 @@ class SelectionResult:
     probe: tuple[str, ...]
     inactive: tuple[str, ...]
     source_hashes: tuple[str, ...]
-    stable_pool_count: int
+    mature_pool_count: int
     probe_pool_count: int
+    market_context: MarketContext | None = None
+    decision_frozen_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,26 +95,23 @@ class _HistoricalRow:
     age_days: int
     volumes: tuple[Decimal, ...]
     trades: tuple[int, ...]
+    market_volumes: tuple[Decimal, ...]
+    market_trades: tuple[int, ...]
     expected_probe_days: int
     observed_probe_days: int
-    median_quote_volume: Decimal
     q25_quote_volume: Decimal
-    minimum_quote_volume: Decimal
-    quote_volume_cv: Decimal
-    median_trades: Decimal
     q25_trades: Decimal
-    minimum_trades: int
 
 
 @dataclass(frozen=True, slots=True)
 class _MarketRow:
     history: _HistoricalRow
     depth_sample_count: int
-    maximum_spread_bps: Decimal
-    minimum_thin_depth_10bps: Decimal
-    minimum_thin_depth_50bps: Decimal
+    depth_worst_spread_bps: Decimal
+    thin_depth_10bps: Decimal
+    thin_depth_50bps: Decimal
     book_ticker_sample_count: int
-    book_ticker_maximum_spread_bps: Decimal
+    book_ticker_worst_spread_bps: Decimal
 
     @property
     def symbol(self) -> str:
@@ -125,10 +126,6 @@ class _MarketRow:
         return self.history.age_days
 
     @property
-    def median_quote_volume(self) -> Decimal:
-        return self.history.median_quote_volume
-
-    @property
     def q25_quote_volume(self) -> Decimal:
         return self.history.q25_quote_volume
 
@@ -137,8 +134,8 @@ class _MarketRow:
         return self.history.q25_trades
 
     @property
-    def quote_volume_cv(self) -> Decimal:
-        return self.history.quote_volume_cv
+    def worst_spread_bps(self) -> Decimal:
+        return max(self.depth_worst_spread_bps, self.book_ticker_worst_spread_bps)
 
 
 def select_bootstrap_universe(
@@ -147,28 +144,24 @@ def select_bootstrap_universe(
     policy: RollingPolicy,
 ) -> SelectionResult:
     rows, _ = _market_rows(snapshot, tracked=(), policy=policy)
-    probe_pool = [
-        row
-        for row in _probe_pool(rows, policy)
-        if len(row.history.volumes) == policy.liquidity_window_days
-    ]
+    probe_pool = _probe_pool(rows, policy)
     if len(probe_pool) < 5:
-        raise ValueError(f"only {len(probe_pool)} probe candidates pass the formal gates")
+        raise ValueError(f"only {len(probe_pool)} recent candidates have complete evidence")
     probe = tuple(sorted(row.symbol for row in probe_pool[:5]))
-    stable_pool = [
-        row for row in _stable_pool(rows, policy) if row.symbol not in set(probe)
+    mature_pool = [
+        row for row in _mature_pool(rows, policy) if row.symbol not in set(probe)
     ]
-    if len(stable_pool) < 55:
-        raise ValueError(f"only {len(stable_pool)} stable candidates pass the formal gates")
-    core = tuple(sorted(row.symbol for row in stable_pool[:50]))
-    boundary = tuple(sorted(row.symbol for row in stable_pool[50:55]))
+    if len(mature_pool) < 55:
+        raise ValueError(f"only {len(mature_pool)} mature candidates have complete evidence")
+    core = tuple(sorted(row.symbol for row in mature_pool[:50]))
+    boundary = tuple(sorted(row.symbol for row in mature_pool[50:55]))
     return SelectionResult(
         core,
         boundary,
         probe,
         (),
         snapshot.source_hashes,
-        len(stable_pool),
+        len(mature_pool),
         len(probe_pool),
     )
 
@@ -186,29 +179,25 @@ def validate_bootstrap_universe(
         tracked=tuple(sorted((*core, *boundary, *probe))),
         policy=policy,
     )
-    formal_probe_pool = [
-        row
-        for row in _probe_pool(rows, policy)
-        if len(row.history.volumes) == policy.liquidity_window_days
-    ]
+    formal_probe_pool = _probe_pool(rows, policy)
     probe_symbols = set(probe)
-    stable_pool = [
-        row for row in _stable_pool(rows, policy) if row.symbol not in probe_symbols
+    mature_pool = [
+        row for row in _mature_pool(rows, policy) if row.symbol not in probe_symbols
     ]
-    stable_symbols = {row.symbol for row in stable_pool}
+    mature_symbols = {row.symbol for row in mature_pool}
     qualified_probe_symbols = {row.symbol for row in formal_probe_pool}
-    missing_stable = sorted(set((*core, *boundary)) - stable_symbols)
+    missing_mature = sorted(set((*core, *boundary)) - mature_symbols)
     missing_probe = sorted(probe_symbols - qualified_probe_symbols)
-    if missing_stable or missing_probe:
+    if missing_mature or missing_probe:
         raise ValueError(
-            "configured bootstrap members fail current formal liquidity gates: "
-            f"stable={missing_stable} probe={missing_probe}"
+            "configured bootstrap members lack complete cross-sectional evidence: "
+            f"mature={missing_mature} probe={missing_probe}"
         )
-    if len(stable_pool) < 55:
-        raise ValueError(f"only {len(stable_pool)} stable candidates pass the formal gates")
+    if len(mature_pool) < 55:
+        raise ValueError(f"only {len(mature_pool)} mature candidates have complete evidence")
     if len(formal_probe_pool) < 5:
         raise ValueError(
-            f"only {len(formal_probe_pool)} probe candidates pass the formal gates"
+            f"only {len(formal_probe_pool)} recent candidates have complete evidence"
         )
     return SelectionResult(
         core=core,
@@ -216,7 +205,7 @@ def validate_bootstrap_universe(
         probe=probe,
         inactive=inactive,
         source_hashes=snapshot.source_hashes,
-        stable_pool_count=len(stable_pool),
+        mature_pool_count=len(mature_pool),
         probe_pool_count=len(formal_probe_pool),
     )
 
@@ -225,6 +214,7 @@ def liquidity_validation_symbols(
     exchange_info: bytes,
     daily_klines: bytes,
     *,
+    tracked: tuple[str, ...] = (),
     policy: RollingPolicy,
 ) -> tuple[str, ...]:
     info = _symbol_info(exchange_info)
@@ -240,27 +230,28 @@ def liquidity_validation_symbols(
         cutoff_ms=cutoff_ms,
         policy=policy,
     )
-    stable = sorted(
-        (
+    mature = _rank_historical_rows(
+        [
             row
             for row in histories
             if row.age_days >= policy.core_minimum_age_days
             and len(row.volumes) == policy.liquidity_window_days
-            and _volume_gate(row, policy)
-        ),
-        key=_stable_sort_key,
-    )[: policy.depth_stable_candidate_count]
+        ]
+    )[: policy.depth_mature_candidate_count]
     probes = sorted(
         (
             row
             for row in histories
             if row.expected_probe_days >= policy.probe_minimum_complete_days
             and row.observed_probe_days == row.expected_probe_days
-            and _volume_gate(row, policy)
         ),
-        key=lambda row: (-row.onboard_time_ms, -row.q25_quote_volume, row.symbol),
+        key=lambda row: (
+            row.age_days >= policy.core_minimum_age_days,
+            -row.onboard_time_ms,
+            row.symbol,
+        ),
     )[: policy.depth_probe_candidate_count]
-    return tuple(sorted({row.symbol for row in (*stable, *probes)}))
+    return tuple(sorted({*tracked, *(row.symbol for row in (*mature, *probes))}))
 
 
 def select_rolling_universe(
@@ -273,43 +264,99 @@ def select_rolling_universe(
     policy: RollingPolicy,
 ) -> SelectionResult:
     rows, inactive = _market_rows(snapshot, tracked=active.members, policy=policy)
-    stable_pool = _stable_pool(rows, policy)
-    stable_rank = {row.symbol: index for index, row in enumerate(stable_pool, start=1)}
+    mature_pool = _mature_pool(rows, policy)
+    mature_rank = {row.symbol: index for index, row in enumerate(mature_pool, start=1)}
     probe_pool = _probe_pool(rows, policy)
-    if len(probe_pool) < 5:
-        active_probe = set(active.probe)
-        return SelectionResult(
-            core=active.core,
-            boundary=active.boundary,
-            probe=active.probe,
-            inactive=tuple(sorted(inactive)),
-            source_hashes=snapshot.source_hashes,
-            stable_pool_count=sum(row.symbol not in active_probe for row in stable_pool),
+    market_context = _market_context(rows, policy)
+    inactive_set = set(inactive)
+    core_or_boundary = set((*active.core, *active.boundary))
+    active_probe = set(active.probe)
+    rows_by_symbol = {row.symbol: row for row in rows}
+    incomplete_active = sorted(
+        symbol
+        for symbol in active.members
+        if symbol not in inactive_set
+        and (
+            (row := rows_by_symbol.get(symbol)) is None
+            or not _complete_market_evidence(row, policy)
+            or (
+                symbol in core_or_boundary
+                and (
+                    row.age_days < policy.core_minimum_age_days
+                    or len(row.history.volumes) != policy.liquidity_window_days
+                )
+            )
+            or (
+                symbol in active_probe
+                and (
+                    row.history.expected_probe_days < policy.probe_minimum_complete_days
+                    or row.history.observed_probe_days != row.history.expected_probe_days
+                )
+            )
+        )
+    )
+    if incomplete_active:
+        return _preserve_active(
+            active,
+            snapshot,
+            inactive,
+            mature_pool_count=len(mature_pool),
             probe_pool_count=len(probe_pool),
+            market_context=market_context,
+            reason="active_member_evidence_incomplete:" + ",".join(incomplete_active),
+        )
+    if len(mature_pool) < 55 or len(probe_pool) < 5:
+        return _preserve_active(
+            active,
+            snapshot,
+            inactive,
+            mature_pool_count=len(mature_pool),
+            probe_pool_count=len(probe_pool),
+            market_context=market_context,
+            reason="cross_sectional_reserve_incomplete",
+        )
+
+    freeze_reason: str | None = None
+    allow_normal_changes = True
+    if market_context.panel_count < policy.market_context_minimum_instruments:
+        freeze_reason = "market_context_panel_incomplete"
+        allow_normal_changes = False
+    elif market_context.state == MarketState.SHOCK_PENDING:
+        freeze_reason = "market_activity_shock_pending"
+        allow_normal_changes = False
+    if not allow_normal_changes and not inactive:
+        return _preserve_active(
+            active,
+            snapshot,
+            inactive,
+            mature_pool_count=len(mature_pool),
+            probe_pool_count=len(probe_pool),
+            market_context=market_context,
+            reason=freeze_reason,
         )
 
     core = list(active.core)
-    replacement_pool = [row.symbol for row in stable_pool if row.symbol not in core]
+    replacement_pool = [row.symbol for row in mature_pool if row.symbol not in core]
     for symbol in (symbol for symbol in core if symbol in inactive):
         replacement = _take_first(replacement_pool, forbidden=set(core))
         if replacement is None:
-            raise ValueError("not enough qualified stable instruments to replace inactive core")
+            raise ValueError("not enough mature instruments to replace inactive core")
         core[core.index(symbol)] = replacement
 
-    if effective_at.weekday() == 0:
+    if allow_normal_changes and effective_at.weekday() == 0:
         changes = len(set(active.core) - set(core))
         promotable = [
             symbol
             for symbol in replacement_pool
             if symbol not in core
-            and stable_rank.get(symbol, 10**9) <= policy.core_entry_rank
+            and mature_rank.get(symbol, 10**9) <= policy.core_entry_rank
         ]
         while promotable and changes < policy.core_weekly_replacements:
             challenger = promotable.pop(0)
             removable = [
                 symbol
                 for symbol in core
-                if stable_rank.get(symbol, 10**9) > policy.core_retain_rank
+                if mature_rank.get(symbol, 10**9) > policy.core_retain_rank
                 and _dwell_complete(
                     core_since.get(symbol, active.effective_at),
                     effective_at,
@@ -318,8 +365,8 @@ def select_rolling_universe(
             ]
             if not removable:
                 break
-            incumbent = max(removable, key=lambda symbol: stable_rank.get(symbol, 10**9))
-            if stable_rank.get(challenger, 10**9) >= stable_rank.get(incumbent, 10**9):
+            incumbent = max(removable, key=lambda symbol: mature_rank.get(symbol, 10**9))
+            if mature_rank.get(challenger, 10**9) >= mature_rank.get(incumbent, 10**9):
                 break
             core[core.index(incumbent)] = challenger
             changes += 1
@@ -327,15 +374,14 @@ def select_rolling_universe(
     core_set = set(core)
     probe_preferred = [row.symbol for row in probe_pool if row.symbol not in core_set]
     if len(probe_preferred) < 5:
-        active_probe = set(active.probe)
-        return SelectionResult(
-            core=active.core,
-            boundary=active.boundary,
-            probe=active.probe,
-            inactive=tuple(sorted(inactive)),
-            source_hashes=snapshot.source_hashes,
-            stable_pool_count=sum(row.symbol not in active_probe for row in stable_pool),
+        return _preserve_active(
+            active,
+            snapshot,
+            inactive,
+            mature_pool_count=len(mature_pool),
             probe_pool_count=len(probe_preferred),
+            market_context=market_context,
+            reason="probe_reserve_incomplete",
         )
     probe = _reconcile_bucket(
         active.probe,
@@ -345,26 +391,25 @@ def select_rolling_universe(
         member_since=member_since,
         effective_at=effective_at,
         minimum_dwell=timedelta(hours=policy.candidate_minimum_dwell_hours),
-        normal_replacement_limit=1,
+        normal_replacement_limit=1 if allow_normal_changes else 0,
     )
 
     probe_set = set(probe)
-    stable_pool_count = sum(row.symbol not in probe_set for row in stable_pool)
-    if stable_pool_count < 55:
-        return SelectionResult(
-            core=active.core,
-            boundary=active.boundary,
-            probe=active.probe,
-            inactive=tuple(sorted(inactive)),
-            source_hashes=snapshot.source_hashes,
-            stable_pool_count=stable_pool_count,
-            probe_pool_count=len(probe_preferred),
-        )
     boundary_ranked = [
         row.symbol
-        for row in stable_pool
+        for row in mature_pool
         if row.symbol not in core_set and row.symbol not in probe_set
     ]
+    if len(boundary_ranked) < 5:
+        return _preserve_active(
+            active,
+            snapshot,
+            inactive,
+            mature_pool_count=len(mature_pool),
+            probe_pool_count=len(probe_preferred),
+            market_context=market_context,
+            reason="boundary_reserve_incomplete",
+        )
     boundary_rank = {
         symbol: index for index, symbol in enumerate(boundary_ranked, start=1)
     }
@@ -387,7 +432,9 @@ def select_rolling_universe(
         member_since=member_since,
         effective_at=effective_at,
         minimum_dwell=timedelta(hours=policy.candidate_minimum_dwell_hours),
-        normal_replacement_limit=max(1, policy.candidate_daily_replacements - 1),
+        normal_replacement_limit=(
+            max(1, policy.candidate_daily_replacements - 1) if allow_normal_changes else 0
+        ),
     )
     return SelectionResult(
         core=tuple(sorted(core)),
@@ -395,8 +442,33 @@ def select_rolling_universe(
         probe=tuple(sorted(probe)),
         inactive=tuple(sorted(inactive)),
         source_hashes=snapshot.source_hashes,
-        stable_pool_count=stable_pool_count,
+        mature_pool_count=len(mature_pool),
         probe_pool_count=len(probe_preferred),
+        market_context=market_context,
+        decision_frozen_reason=freeze_reason,
+    )
+
+
+def _preserve_active(
+    active: UniverseDecision,
+    snapshot: DiscoverySnapshot,
+    inactive: tuple[str, ...],
+    *,
+    mature_pool_count: int,
+    probe_pool_count: int,
+    market_context: MarketContext,
+    reason: str | None,
+) -> SelectionResult:
+    return SelectionResult(
+        core=active.core,
+        boundary=active.boundary,
+        probe=active.probe,
+        inactive=tuple(sorted(inactive)),
+        source_hashes=snapshot.source_hashes,
+        mature_pool_count=mature_pool_count,
+        probe_pool_count=probe_pool_count,
+        market_context=market_context,
+        decision_frozen_reason=reason,
     )
 
 
@@ -477,9 +549,13 @@ def _historical_rows(
     cutoff_ms: int,
     policy: RollingPolicy,
 ) -> list[_HistoricalRow]:
-    window_start_ms = cutoff_ms - policy.liquidity_window_days * DAY_MS
-    expected = tuple(range(window_start_ms, cutoff_ms, DAY_MS))
-    expected_set = set(expected)
+    selection_start_ms = cutoff_ms - policy.liquidity_window_days * DAY_MS
+    context_days = policy.market_context_baseline_days + CONFIRMATION_DAYS
+    context_start_ms = cutoff_ms - context_days * DAY_MS
+    context_expected = tuple(range(context_start_ms, cutoff_ms, DAY_MS))
+    evidence_days = max(policy.liquidity_window_days, context_days)
+    evidence_start_ms = cutoff_ms - evidence_days * DAY_MS
+    evidence_expected_set = set(range(evidence_start_ms, cutoff_ms, DAY_MS))
     rows: list[_HistoricalRow] = []
     for symbol, raw in eligible.items():
         onboard_ms = _positive_int(raw.get("onboardDate"), f"{symbol}.onboardDate")
@@ -489,16 +565,28 @@ def _historical_rows(
                 raise ValueError(f"invalid daily kline for {symbol}")
             open_ms = _positive_int(value[0], f"{symbol}.openTime", allow_zero=True)
             close_ms = _positive_int(value[6], f"{symbol}.closeTime", allow_zero=True)
-            if open_ms in expected_set and close_ms < cutoff_ms:
+            if open_ms in evidence_expected_set and close_ms < cutoff_ms:
                 bars[open_ms] = value
-        opens = tuple(sorted(bars))
-        volumes = tuple(_decimal(bars[open_ms][7], f"{symbol}.quoteVolume") for open_ms in opens)
+        opens = tuple(open_ms for open_ms in sorted(bars) if open_ms >= selection_start_ms)
+        volumes = tuple(
+            _decimal(bars[open_ms][7], f"{symbol}.quoteVolume", allow_zero=True)
+            for open_ms in opens
+        )
         trades = tuple(
             _positive_int(bars[open_ms][8], f"{symbol}.trades", allow_zero=True)
             for open_ms in opens
         )
+        market_opens = tuple(open_ms for open_ms in context_expected if open_ms in bars)
+        market_volumes = tuple(
+            _decimal(bars[open_ms][7], f"{symbol}.quoteVolume", allow_zero=True)
+            for open_ms in market_opens
+        )
+        market_trades = tuple(
+            _positive_int(bars[open_ms][8], f"{symbol}.trades", allow_zero=True)
+            for open_ms in market_opens
+        )
         first_full_day = ((onboard_ms + DAY_MS - 1) // DAY_MS) * DAY_MS
-        first_probe_day = max(first_full_day, window_start_ms)
+        first_probe_day = max(first_full_day, selection_start_ms)
         expected_probe = (
             tuple(range(first_probe_day, cutoff_ms, DAY_MS))
             if first_probe_day < cutoff_ms
@@ -514,89 +602,97 @@ def _historical_rows(
                 age_days=max(0, (cutoff_ms - onboard_ms) // DAY_MS),
                 volumes=volumes,
                 trades=trades,
+                market_volumes=market_volumes,
+                market_trades=market_trades,
                 expected_probe_days=len(expected_probe),
                 observed_probe_days=observed_probe,
-                median_quote_volume=_median(volumes),
                 q25_quote_volume=_percentile(values=volumes, numerator=1, denominator=4),
-                minimum_quote_volume=min(volumes),
-                quote_volume_cv=_coefficient_of_variation(volumes),
-                median_trades=_median(tuple(Decimal(value) for value in trades)),
                 q25_trades=_percentile(
                     values=tuple(Decimal(value) for value in trades),
                     numerator=1,
                     denominator=4,
                 ),
-                minimum_trades=min(trades),
             )
         )
     return rows
 
 
-def _stable_pool(rows: list[_MarketRow], policy: RollingPolicy) -> list[_MarketRow]:
-    return sorted(
-        (
+def _mature_pool(rows: list[_MarketRow], policy: RollingPolicy) -> list[_MarketRow]:
+    return _rank_market_rows(
+        [
             row
             for row in rows
             if row.age_days >= policy.core_minimum_age_days
             and len(row.history.volumes) == policy.liquidity_window_days
-            and _quality_gate(row, policy)
-        ),
-        key=lambda row: (
-            -row.q25_quote_volume,
-            -row.median_quote_volume,
-            -row.q25_trades,
-            row.quote_volume_cv,
-            row.symbol,
-        ),
+            and _complete_market_evidence(row, policy)
+        ]
     )
 
 
 def _probe_pool(rows: list[_MarketRow], policy: RollingPolicy) -> list[_MarketRow]:
-    return sorted(
-        (
-            row
-            for row in rows
-            if row.history.expected_probe_days >= policy.probe_minimum_complete_days
-            and row.history.observed_probe_days == row.history.expected_probe_days
-            and _quality_gate(row, policy)
-        ),
-        key=lambda row: (-row.onboard_time_ms, -row.q25_quote_volume, row.symbol),
-    )
+    eligible = [
+        row
+        for row in rows
+        if row.history.expected_probe_days >= policy.probe_minimum_complete_days
+        and row.history.observed_probe_days == row.history.expected_probe_days
+        and _complete_market_evidence(row, policy)
+    ]
+    recent = [row for row in eligible if row.age_days < policy.core_minimum_age_days]
+    fallback = [row for row in eligible if row.age_days >= policy.core_minimum_age_days]
+    return [*_rank_market_rows(recent), *_rank_market_rows(fallback)]
 
 
-def _quality_gate(row: _MarketRow, policy: RollingPolicy) -> bool:
+def _complete_market_evidence(row: _MarketRow, policy: RollingPolicy) -> bool:
     return (
-        _volume_gate(row.history, policy)
-        and row.depth_sample_count == policy.liquidity_depth_samples
-        and row.maximum_spread_bps <= policy.maximum_spread_bps
-        and row.minimum_thin_depth_10bps >= policy.minimum_thin_depth_10bps
-        and row.minimum_thin_depth_50bps >= policy.minimum_thin_depth_50bps
+        row.depth_sample_count == policy.liquidity_depth_samples
         and row.book_ticker_sample_count == policy.liquidity_book_ticker_samples
-        and row.book_ticker_maximum_spread_bps <= policy.maximum_spread_bps
+        and row.worst_spread_bps.is_finite()
+        and row.worst_spread_bps >= 0
+        and row.thin_depth_10bps.is_finite()
+        and row.thin_depth_10bps >= 0
+        and row.thin_depth_50bps.is_finite()
+        and row.thin_depth_50bps >= 0
     )
 
 
-def _volume_gate(row: _HistoricalRow, policy: RollingPolicy) -> bool:
-    return (
-        row.median_quote_volume >= policy.minimum_median_daily_quote_volume
-        and row.q25_quote_volume >= policy.minimum_q25_daily_quote_volume
-        and row.minimum_quote_volume >= policy.minimum_daily_quote_volume
-        and row.quote_volume_cv <= policy.maximum_quote_volume_cv
-        and row.median_trades >= policy.minimum_median_daily_trades
-        and row.q25_trades >= policy.minimum_q25_daily_trades
-        and row.minimum_trades >= policy.minimum_daily_trades
+def _rank_historical_rows(rows: list[_HistoricalRow]) -> list[_HistoricalRow]:
+    return rank_cross_section(
+        rows,
+        symbol=lambda row: row.symbol,
+        metrics=(
+            (lambda row: row.q25_quote_volume, True),
+            (lambda row: row.q25_trades, True),
+        ),
     )
 
 
-def _stable_sort_key(
-    row: _HistoricalRow,
-) -> tuple[Decimal, Decimal, Decimal, Decimal, str]:
-    return (
-        -row.q25_quote_volume,
-        -row.median_quote_volume,
-        -row.q25_trades,
-        row.quote_volume_cv,
-        row.symbol,
+def _rank_market_rows(rows: list[_MarketRow]) -> list[_MarketRow]:
+    return rank_cross_section(
+        rows,
+        symbol=lambda row: row.symbol,
+        metrics=(
+            (lambda row: row.q25_quote_volume, True),
+            (lambda row: row.q25_trades, True),
+            (lambda row: row.thin_depth_10bps, True),
+            (lambda row: row.thin_depth_50bps, True),
+            (lambda row: row.worst_spread_bps, False),
+        ),
+    )
+
+
+def _market_context(rows: list[_MarketRow], policy: RollingPolicy) -> MarketContext:
+    return evaluate_market_context(
+        [
+            ActivitySeries(
+                quote_volumes=row.history.market_volumes,
+                trade_counts=row.history.market_trades,
+            )
+            for row in rows
+        ],
+        baseline_days=policy.market_context_baseline_days,
+        change_ratio=policy.market_context_change_ratio,
+        breadth_ratio=policy.market_context_breadth_ratio,
+        minimum_instruments=policy.market_context_minimum_instruments,
     )
 
 
@@ -843,11 +939,3 @@ def _percentile(
     return (
         ordered[lower] * (denominator - remainder) + ordered[upper] * remainder
     ) / denominator
-
-
-def _coefficient_of_variation(values: tuple[Decimal, ...]) -> Decimal:
-    mean = sum(values, Decimal()) / len(values)
-    if mean == 0:
-        return Decimal("Infinity")
-    variance = sum(((value - mean) ** 2 for value in values), Decimal()) / len(values)
-    return variance.sqrt() / mean

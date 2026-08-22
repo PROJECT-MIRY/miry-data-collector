@@ -9,13 +9,13 @@ import pytest
 from ft_shadow_data_plane.central.binance import logical_identity, parse_typed_row
 from ft_shadow_data_plane.contracts.models import RawEventV1, StreamType
 from ft_shadow_data_plane.edge.binance import (
-    BinanceRestClient,
     BinanceWebSocketConnection,
     SourceIdentity,
     SubscriptionAuditError,
     SubscriptionUpdate,
     decode_websocket,
 )
+from ft_shadow_data_plane.edge.rest import BinanceRestClient
 
 
 class StalledWebSocket:

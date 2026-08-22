@@ -86,5 +86,7 @@ v0.3.10 保留 v0.3.8 的路由均衡和恢复门禁以及 v0.3.9 的选币规�
 “限速锁覆盖整个 HTTP 请求”改成“只预约请求起点”：全局每 0.75 秒启动一个 1,000 档
 snapshot，同时最多允许 4 个慢 HTTP 在途，恢复队列存在时暂停低优先级 discovery REST。这样
 仍把 snapshot 控制在约 1,600 weight/min，且 4 个 route 同时恢复时不再因单个慢请求把所有
-symbol 串行阻塞。正式名单、raw、rsync/ACK 和 107 合同不变。设计与验收见
+symbol 串行阻塞。实时 source readiness 与约 6 分钟的 universe discovery readiness 分离，OI
+首轮在 5 秒内错峰完成，正式重启不再等待整轮选币证据。正式名单、raw、rsync/ACK 和 107 合同
+不变。设计与验收见
 [v0.3.10 snapshot 调度记录](docs/v0.3.10-snapshot-scheduler-2026-08-23.md)。

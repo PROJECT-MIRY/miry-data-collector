@@ -136,6 +136,7 @@ class EdgeConfig(BaseModel):
     day_seal_grace_seconds: float = Field(default=150.0, ge=10, le=600)
     lease_heartbeat_seconds: float = Field(default=30.0, ge=5, le=300)
     open_interest_interval_seconds: int = Field(default=30, ge=10, le=300)
+    open_interest_startup_spread_seconds: float = Field(default=5.0, ge=1, le=30)
     clock_sample_interval_seconds: int = Field(default=60, ge=10, le=300)
     snapshot_request_interval_seconds: float = Field(default=0.75, ge=0.5, le=10)
     snapshot_request_concurrency: int = Field(default=4, ge=1, le=8)

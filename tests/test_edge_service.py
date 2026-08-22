@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -48,6 +49,17 @@ class StorageSources:
         self.ready_calls += 1
         if self.ready_error is not None:
             raise self.ready_error
+
+
+class ReadinessSources:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def wait_ready(self) -> None:
+        self.calls.append("realtime")
+
+    async def wait_discovery_ready(self) -> None:
+        self.calls.append("discovery")
 
 
 class StorageSpool:
@@ -140,6 +152,31 @@ class RecordingLease:
 class FakeDecision(BaseModel):
     members: tuple[str, ...]
     universe_hash: str
+
+
+@pytest.mark.asyncio
+async def test_established_collection_recovery_does_not_wait_for_discovery(
+    tmp_path: Path,
+) -> None:
+    service: Any = object.__new__(EdgeService)
+    service._sources = ReadinessSources()
+    service._formal_start_path = tmp_path / "formal-start.json"
+    service._formal_start_path.write_text("{}", encoding="ascii")
+
+    await service._wait_source_readiness()
+
+    assert service._sources.calls == ["realtime"]
+
+
+@pytest.mark.asyncio
+async def test_new_collection_waits_for_discovery_before_formal_start(tmp_path: Path) -> None:
+    service: Any = object.__new__(EdgeService)
+    service._sources = ReadinessSources()
+    service._formal_start_path = tmp_path / "formal-start.json"
+
+    await service._wait_source_readiness()
+
+    assert service._sources.calls == ["realtime", "discovery"]
 
 
 @pytest.mark.asyncio
@@ -277,6 +314,7 @@ def _storage_service(
     service._stale_gaps = ()
     service._universe_store = SimpleNamespace(active=SimpleNamespace(members=_members()))
     service._config = SimpleNamespace(storage_check_seconds=0)
+    service._formal_start_path = SimpleNamespace(exists=lambda: True)
 
     async def no_op() -> None:
         return None

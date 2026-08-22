@@ -125,7 +125,8 @@ sudoedit /etc/ft-shadow-data-plane/edge.yaml
 `market_context_change_ratio: 1.25`、`market_context_breadth_ratio: 0.70`、
 `market_context_minimum_instruments: 60`、`depth_mature_candidate_count: 200` 和
 `mature_pool_warning_size: 65`。edge 配置还必须包含 `snapshot_request_interval_seconds: 0.75` 和
-`snapshot_request_concurrency: 4`。Pydantic 拒绝未知字段，因此旧选择器字段必须删除干净。
+`snapshot_request_concurrency: 4`，以及 `open_interest_startup_spread_seconds: 5`。Pydantic 拒绝
+未知字段，因此旧选择器字段必须删除干净。
 
 ## 6. 验证和启动
 
@@ -272,9 +273,12 @@ universe、gap 或 formal start；保留 active `7.0 / sequence 8`。按第 5 �
 从 v0.3.9 升级 v0.3.10 同样禁止 clean start，且不改 107。先记录 active universe、formal-start
 哈希、open gap、ready 和 ACK 计数；只安装新部署脚本，把现有 `edge.yaml` 的
 `snapshot_request_interval_seconds` 改为 `0.75` 并新增 `snapshot_request_concurrency: 4`，然后把
-`EDGE_IMAGE` 更新为 v0.3.10 immutable digest。只允许一次受控重启，保留 raw、ready、writing、
-ACK、universe、gap、lease 和 formal-start。重启后全部 route 的 snapshot scheduling 应在约
-13 秒内完成；网络 HTTP 尾延迟仍可能延长单币 bridge，但不得重新形成全局串行等待。
+`open_interest_startup_spread_seconds` 改为 `5`，再把 `EDGE_IMAGE` 更新为 v0.3.10 immutable
+digest。只允许一次受控重启，保留 raw、ready、writing、
+ACK、universe、gap、lease 和 formal-start。单 route 恢复的 snapshot 纯调度等待应不超过约
+13 秒；完整冷启动时 60 个 snapshot 共享全局限速器，全部 realtime readiness 应在约 45--50 秒
+内完成且不等待 universe discovery。网络 HTTP 尾延迟仍可能延长单币 bridge，但不得因慢 HTTP
+重新形成请求执行阶段的全局串行等待。
 
 从 v0.3.8 可直接升级 v0.3.10：同一次停机内先按第 5 节替换 v0.3.9 的选择器字段，再加入上述
 snapshot 参数，最后只启动一次 v0.3.10；不得先后启动两个中间版本。

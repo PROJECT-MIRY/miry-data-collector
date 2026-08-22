@@ -139,6 +139,8 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 - WebSocket queue 为 16，单消息上限 2MiB；
 - 1,000 档 snapshot 起点全局最小间隔 0.75 秒、最多 4 个 HTTP 在途，持续上限约 1,600
   request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；
+- OI 稳态仍为每币 30 秒，启动首轮只在 5 秒窗口内确定性错峰；realtime readiness 不等待完整
+  universe discovery；
 - raw queue 总字节上限 64MiB，70% 告警，50% 恢复；
 - writer batch 上限 2000 events 或 2MiB；
 - RSS p95 不超过 600MiB，峰值不超过 700MiB，无 OOM；

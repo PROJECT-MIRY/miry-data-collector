@@ -12,7 +12,7 @@ import pytest
 
 from ft_shadow_data_plane.contracts.serde import universe_hash
 from ft_shadow_data_plane.edge.config import load_edge_config
-from ft_shadow_data_plane.edge.sources import StableWeightedSharder
+from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
@@ -93,7 +93,14 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert sum(shard_sizes) == 60
     assert max(shard_sizes) <= 18
     assert max(shard_loads) / min(shard_loads) < 1.05
-    assert (max(shard_sizes) - 1) * config.snapshot_request_interval_seconds <= 13
+    single_route_snapshot_wait = (max(shard_sizes) - 1) * (
+        config.snapshot_request_interval_seconds
+    )
+    cold_start_snapshot_wait = (sum(shard_sizes) - 1) * (
+        config.snapshot_request_interval_seconds
+    )
+    assert single_route_snapshot_wait <= 13
+    assert cold_start_snapshot_wait <= 45
     assert config.queue_max_bytes == 64 * 1024**2
     assert config.minimum_free_bytes == 2 * 1024**3
     assert config.websocket_max_queue == 16
@@ -103,6 +110,7 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert config.refresh_failures_before_reconnect == 2
     assert config.snapshot_request_interval_seconds == 0.75
     assert config.snapshot_request_concurrency == 4
+    assert config.open_interest_startup_spread_seconds == 5
     assert config.writer_batch_bytes == 2 * 1024**2
     assert "mem_limit: 768m" in compose
     assert "cpus: 1.00" in compose

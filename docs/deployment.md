@@ -69,6 +69,7 @@ start；保留 active `7.0 / sequence 8`、formal start 和全部数据状态。
 证据，证据完整前保持当前名单。v0.3.9 不改变 raw、rsync 或 central 合同，107 无需升级。
 
 从 v0.3.9 升级 v0.3.10 只更新 Vultr edge image、部署脚本、snapshot interval `0.75` 和
-snapshot concurrency `4`。不得 clean start，也不得修改正式 60 币、raw、ready、ACK、universe、
+snapshot concurrency `4`，并设置 OI startup spread `5`。不得 clean start，也不得修改正式 60
+币、raw、ready、ACK、universe、
 gap、lease 或 formal-start。v0.3.10 不改变 central 合同，107 不需要升级。从 v0.3.8 可在一次
 受控停机中同时应用 v0.3.9 选择配置和 v0.3.10 snapshot 配置，然后直接启动 v0.3.10。

@@ -15,12 +15,13 @@ import pytest
 from ft_shadow_data_plane.contracts.models import GapReason, RawEventV1, StreamType
 from ft_shadow_data_plane.edge.binance import SourceIdentity, public_subscriptions
 from ft_shadow_data_plane.edge.config import load_edge_config
+from ft_shadow_data_plane.edge.readiness import required_realtime_sources
+from ft_shadow_data_plane.edge.scheduling import advance_fixed_deadline, staggered_offsets
+from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
 from ft_shadow_data_plane.edge.sources import (
     ConnectionHandle,
     RestPollers,
     RouteRunner,
-    StableWeightedSharder,
-    _advance_deadline,
     _reconnect_delay,
 )
 
@@ -203,7 +204,10 @@ async def test_open_interest_failure_is_tracked_per_symbol() -> None:
         return None
 
     pollers = RestPollers(
-        config=SimpleNamespace(open_interest_interval_seconds=0.01),  # type: ignore[arg-type]
+        config=SimpleNamespace(
+            open_interest_interval_seconds=0.01,
+            open_interest_startup_spread_seconds=0.01,
+        ),  # type: ignore[arg-type]
         instruments=("BTCUSDT", "ETHUSDT"),
         collector_id="tokyo01",
         boot_id="boot",
@@ -231,8 +235,28 @@ async def test_open_interest_failure_is_tracked_per_symbol() -> None:
 
 
 def test_fixed_rate_deadline_skips_missed_slots_without_drifting() -> None:
-    assert _advance_deadline(100.0, 30.0, 101.0) == 130.0
-    assert _advance_deadline(100.0, 30.0, 170.0) == 190.0
+    assert advance_fixed_deadline(100.0, 30.0, 101.0) == 130.0
+    assert advance_fixed_deadline(100.0, 30.0, 170.0) == 190.0
+
+
+def test_realtime_readiness_does_not_wait_for_nightly_discovery() -> None:
+    assert required_realtime_sources(4) == {
+        "public-0",
+        "public-1",
+        "public-2",
+        "public-3",
+        "market-0",
+        "open_interest",
+        "clock",
+    }
+
+
+def test_startup_poll_offsets_fit_inside_bounded_window() -> None:
+    offsets = staggered_offsets(60, 5)
+
+    assert offsets[0] == 0
+    assert offsets[-1] < 5
+    assert offsets == tuple(sorted(offsets))
 
 
 @pytest.mark.asyncio

@@ -134,7 +134,7 @@ class EdgeService:
         try:
             if not (await asyncio.to_thread(self._spool.status)).hard_limited:
                 await self._sources.start(self._universe_store.active.members)
-                await self._sources.wait_ready()
+                await self._wait_source_readiness()
                 await self._close_stale_gaps()
                 await self._seal_completed_days()
                 await self._mark_formal_start()
@@ -201,7 +201,7 @@ class EdgeService:
                     if not self._sources.running:
                         try:
                             await self._sources.start(self._universe_store.active.members)
-                            await self._sources.wait_ready()
+                            await self._wait_source_readiness()
                         except TimeoutError as exc:
                             logger.warning(
                                 "storage recovery source readiness failed; will retry error=%r",
@@ -332,6 +332,11 @@ class EdgeService:
                     len(set(self._universe_store.active.members) ^ set(decision.members)),
                 )
 
+    async def _wait_source_readiness(self) -> None:
+        await self._sources.wait_ready()
+        if not self._formal_start_path.exists():
+            await self._sources.wait_discovery_ready()
+
     async def _mark_formal_start(self) -> None:
         active = self._universe_store.active
         await self._emit_control_event(StreamType.UNIVERSE_DECISION, canonical_json_bytes(active))
@@ -451,7 +456,7 @@ class EdgeService:
                 connection_id=gap.connection_id,
                 exchange_symbols=gap.exchange_symbols,
                 stream_types=gap.stream_types,
-                detail="new collector boot reached full source readiness",
+                detail="new collector boot reached realtime source readiness",
             )
 
     async def _seal_completed_days(self) -> None:

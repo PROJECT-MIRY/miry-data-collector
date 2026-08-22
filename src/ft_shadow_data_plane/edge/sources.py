@@ -21,7 +21,6 @@ from ft_shadow_data_plane.central.selector import (
 from ft_shadow_data_plane.contracts.models import SYMBOL_PATTERN, GapReason, StreamType
 from ft_shadow_data_plane.contracts.serde import canonical_json_bytes, sha256_bytes
 from ft_shadow_data_plane.edge.binance import (
-    BinanceRestClient,
     BinanceWebSocketConnection,
     SourceIdentity,
     SubscriptionAuditError,
@@ -33,100 +32,12 @@ from ft_shadow_data_plane.edge.config import EdgeConfig
 from ft_shadow_data_plane.edge.gaps import GapJournal
 from ft_shadow_data_plane.edge.ingest import IngestCoordinator
 from ft_shadow_data_plane.edge.queue import ByteBoundedQueues, QueueOverloaded
+from ft_shadow_data_plane.edge.readiness import SourceReadiness
+from ft_shadow_data_plane.edge.rest import BinanceRestClient
+from ft_shadow_data_plane.edge.scheduling import advance_fixed_deadline, staggered_offsets
+from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
 
 logger = logging.getLogger(__name__)
-
-
-class StableWeightedSharder:
-    def __init__(self, count: int, weights: dict[str, int]) -> None:
-        if count < 1:
-            raise ValueError("shard count must be positive")
-        self._count = count
-        self._weights = weights
-        self._assignments: dict[str, int] = {}
-
-    def shards(self, instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
-        shard_count = min(self._count, len(instruments))
-        if shard_count == 0:
-            return ()
-        initial_assignment = not self._assignments
-        active = set(instruments)
-        self._assignments = {
-            symbol: shard
-            for symbol, shard in self._assignments.items()
-            if symbol in active and shard < shard_count
-        }
-        shards: list[list[str]] = [[] for _ in range(shard_count)]
-        loads = [0] * shard_count
-        for symbol, shard in sorted(self._assignments.items()):
-            shards[shard].append(symbol)
-            loads[shard] += self._weight(symbol)
-        unassigned = sorted(
-            active - self._assignments.keys(),
-            key=lambda symbol: (-self._weight(symbol), symbol),
-        )
-        for symbol in unassigned:
-            shard = min(range(shard_count), key=lambda index: (loads[index], index))
-            self._assignments[symbol] = shard
-            shards[shard].append(symbol)
-            loads[shard] += self._weight(symbol)
-        if initial_assignment:
-            self._improve_initial_balance(shards, loads)
-            self._assignments = {
-                symbol: shard for shard, symbols in enumerate(shards) for symbol in symbols
-            }
-        return tuple(tuple(sorted(shard)) for shard in shards)
-
-    def _weight(self, symbol: str) -> int:
-        if symbol in self._weights:
-            return self._weights[symbol]
-        if self._weights:
-            ordered = sorted(self._weights.values())
-            return ordered[len(ordered) // 2]
-        return 1
-
-    def _improve_initial_balance(self, shards: list[list[str]], loads: list[int]) -> None:
-        while True:
-            current_spread = max(loads) - min(loads)
-            best: tuple[int, int, str, str, int, int] | None = None
-            best_spread = current_spread
-            for left in range(len(shards)):
-                for right in range(left + 1, len(shards)):
-                    for left_symbol in shards[left]:
-                        for right_symbol in shards[right]:
-                            next_left = (
-                                loads[left]
-                                - self._weight(left_symbol)
-                                + self._weight(right_symbol)
-                            )
-                            next_right = (
-                                loads[right]
-                                - self._weight(right_symbol)
-                                + self._weight(left_symbol)
-                            )
-                            next_loads = [*loads]
-                            next_loads[left] = next_left
-                            next_loads[right] = next_right
-                            spread = max(next_loads) - min(next_loads)
-                            if spread < best_spread:
-                                best_spread = spread
-                                best = (
-                                    left,
-                                    right,
-                                    left_symbol,
-                                    right_symbol,
-                                    next_left,
-                                    next_right,
-                                )
-            if best is None:
-                return
-            left, right, left_symbol, right_symbol, next_left, next_right = best
-            shards[left].remove(left_symbol)
-            shards[left].append(right_symbol)
-            shards[right].remove(right_symbol)
-            shards[right].append(left_symbol)
-            loads[left] = next_left
-            loads[right] = next_right
 
 
 @dataclass(slots=True)
@@ -868,7 +779,10 @@ class RestPollers:
 
             added = tuple(sorted(proposed - set(self._oi_tasks)))
             interval = self._config.open_interest_interval_seconds
-            count = max(1, len(added))
+            startup_window = min(
+                float(interval), self._config.open_interest_startup_spread_seconds
+            )
+            startup_offsets = staggered_offsets(len(added), startup_window)
             for index, symbol in enumerate(added):
                 first_pass = asyncio.get_running_loop().create_future()
                 self._oi_first_pass[symbol] = first_pass
@@ -876,7 +790,7 @@ class RestPollers:
                     self._open_interest_symbol_loop(
                         symbol,
                         first_pass,
-                        initial_delay=index * interval / count,
+                        initial_delay=startup_offsets[index],
                     ),
                     name=f"open-interest-{symbol}",
                 )
@@ -928,7 +842,7 @@ class RestPollers:
                 )
                 logger.warning("open-interest poll failed symbol=%s error=%s", symbol, exc)
             finally:
-                next_poll = _advance_deadline(next_poll, interval, time.monotonic())
+                next_poll = advance_fixed_deadline(next_poll, interval, time.monotonic())
 
     async def _fetch_oi(self, symbol: str) -> None:
         payload, requested_at, observed_at, request_id = await self._rest.fetch(
@@ -1279,7 +1193,7 @@ class SourceManager:
         self._on_discovery = on_discovery
         self._stop: asyncio.Event | None = None
         self._task: asyncio.Task[None] | None = None
-        self._ready: asyncio.Event | None = None
+        self._readiness: SourceReadiness | None = None
         self._routes: dict[str, RouteRunner] = {}
         self._pollers: RestPollers | None = None
         self._instruments: tuple[str, ...] = ()
@@ -1305,16 +1219,28 @@ class SourceManager:
         if self._task is not None:
             raise RuntimeError("sources already running")
         self._stop = asyncio.Event()
-        self._ready = asyncio.Event()
+        self._readiness = SourceReadiness(
+            min(self._config.public_connection_shards, len(instruments))
+        )
         self._instruments = instruments
         self._task = asyncio.create_task(
-            self._run(instruments, self._stop, self._ready), name="binance-sources"
+            self._run(instruments, self._stop, self._readiness), name="binance-sources"
         )
 
     async def wait_ready(self) -> None:
-        if self._task is None or self._ready is None:
+        if self._readiness is None:
             raise RuntimeError("sources are not running")
-        ready_task = asyncio.create_task(self._ready.wait())
+        await self._wait_for_readiness(self._readiness.realtime, "realtime")
+
+    async def wait_discovery_ready(self) -> None:
+        if self._readiness is None:
+            raise RuntimeError("sources are not running")
+        await self._wait_for_readiness(self._readiness.discovery, "discovery")
+
+    async def _wait_for_readiness(self, event: asyncio.Event, phase: str) -> None:
+        if self._task is None:
+            raise RuntimeError("sources are not running")
+        ready_task = asyncio.create_task(event.wait())
         done, pending = await asyncio.wait(
             (ready_task, self._task), timeout=600, return_when=asyncio.FIRST_COMPLETED
         )
@@ -1324,10 +1250,10 @@ class SourceManager:
         if self._task in done:
             error = _task_error(self._task)
             if error is not None:
-                raise RuntimeError("Binance sources failed before readiness") from error
-            raise RuntimeError("Binance sources stopped before readiness")
+                raise RuntimeError(f"Binance sources failed before {phase} readiness") from error
+            raise RuntimeError(f"Binance sources stopped before {phase} readiness")
         if ready_task not in done:
-            raise TimeoutError("Binance sources did not become ready within 600 seconds")
+            raise TimeoutError(f"Binance {phase} sources did not become ready within 600 seconds")
 
     async def stop(self) -> None:
         if self._task is None or self._stop is None:
@@ -1336,7 +1262,7 @@ class SourceManager:
         await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
         self._stop = None
-        self._ready = None
+        self._readiness = None
         self._routes = {}
         self._pollers = None
 
@@ -1355,7 +1281,7 @@ class SourceManager:
             self._instruments = instruments
 
     async def _run(
-        self, instruments: tuple[str, ...], stop: asyncio.Event, ready: asyncio.Event
+        self, instruments: tuple[str, ...], stop: asyncio.Event, readiness: SourceReadiness
     ) -> None:
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -1367,19 +1293,6 @@ class SourceManager:
             )
             routes: list[Awaitable[None]] = []
             shards = self._public_sharder.shards(instruments)
-            expected = {
-                *(f"public-{index}" for index in range(len(shards))),
-                "market-0",
-                "open_interest",
-                "discovery",
-                "clock",
-            }
-            ready_names: set[str] = set()
-
-            def mark_ready(name: str) -> None:
-                ready_names.add(name)
-                if expected <= ready_names:
-                    ready.set()
 
             for index, shard in enumerate(shards):
                 public_stream_types = [StreamType.BOOK_TICKER, StreamType.DEPTH]
@@ -1410,7 +1323,7 @@ class SourceManager:
                     ping_timeout_seconds=self._config.websocket_ping_timeout_seconds,
                     service_stop=stop,
                     d0_enabled=self._config.d0_enabled,
-                    on_ready=mark_ready,
+                    on_ready=readiness.mark,
                     subscriptions_for=lambda values: public_subscriptions(
                         values, d0_enabled=self._config.d0_enabled
                     ),
@@ -1454,7 +1367,7 @@ class SourceManager:
                 ping_interval_seconds=self._config.websocket_ping_interval_seconds,
                 ping_timeout_seconds=self._config.websocket_ping_timeout_seconds,
                 service_stop=stop,
-                on_ready=mark_ready,
+                on_ready=readiness.mark,
                 subscriptions_for=market_subscriptions,
                 liveness_timeout_seconds=self._config.mark_price_liveness_seconds,
                 liveness_stream_types=(StreamType.MARK_PRICE,),
@@ -1483,7 +1396,7 @@ class SourceManager:
                 gaps=self._gaps,
                 rest=rest,
                 stop=stop,
-                on_ready=mark_ready,
+                on_ready=readiness.mark,
                 on_discovery=self._on_discovery,
             )
             self._pollers = pollers
@@ -1571,11 +1484,3 @@ async def _wait_event(event: asyncio.Event, delay_seconds: float) -> None:
         await asyncio.wait_for(event.wait(), timeout=delay_seconds)
     except TimeoutError:
         pass
-
-
-def _advance_deadline(previous: float, interval: float, now: float) -> float:
-    deadline = previous + interval
-    if deadline <= now:
-        missed = int((now - deadline) // interval) + 1
-        deadline += missed * interval
-    return deadline

@@ -227,6 +227,7 @@ class EdgeService:
         if not (
             result.seen
             or result.applied
+            or result.replayed
             or result.invalid
             or result.hash_mismatches
             or result.unknown
@@ -243,10 +244,11 @@ class EdgeService:
         )
         logger.log(
             level,
-            "ack apply complete seen=%d applied=%d gc_bytes=%d invalid=%d "
+            "ack apply complete seen=%d applied=%d replayed=%d gc_bytes=%d invalid=%d "
             "hash_mismatches=%d unknown=%d manifest_errors=%d recovered=%d",
             result.seen,
             result.applied,
+            result.replayed,
             result.gc_bytes,
             result.invalid,
             result.hash_mismatches,

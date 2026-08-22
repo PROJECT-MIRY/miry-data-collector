@@ -2,72 +2,72 @@ collector_id: tokyo01
 data_root: /data
 universe:
   experiment_id: formal-60-v3-2026-08-22
-  bootstrap_evidence_sha256: d1eb8664c9636c78627e9768b4c874594bd48a31f3fdc115476788368207abf0
-  core_generation: 6
-  candidate_revision: 2
+  bootstrap_evidence_sha256: 146dd4ae8ae102b026f24760937298368d2efbaf87569624be943553173eed8c
+  core_generation: 7
+  candidate_revision: 0
   decision_sequence: 8
   core:
     - 1000BONKUSDT
     - 1000PEPEUSDT
     - 1000SHIBUSDT
     - AAVEUSDT
+    - ACEUSDT
     - ADAUSDT
-    - AKEUSDT
     - ALLOUSDT
     - ARBUSDT
     - AVAXUSDT
     - BANKUSDT
-    - BCHUSDT
+    - BEATUSDT
     - BNBUSDT
     - BTCUSDT
     - COTIUSDT
-    - DEXEUSDT
+    - CRVUSDT
+    - CYSUSDT
     - DOGEUSDT
     - DOTUSDT
-    - ENAUSDT
-    - ESPORTSUSDT
     - ETHUSDT
-    - EULUSDT
     - FARTCOINUSDT
     - FETUSDT
     - FILUSDT
-    - HBARUSDT
+    - GIGGLEUSDT
+    - HOMEUSDT
     - HYPEUSDT
+    - ICPUSDT
     - INJUSDT
+    - JTOUSDT
     - KAITOUSDT
+    - LABUSDT
     - LINKUSDT
     - LITUSDT
     - LTCUSDT
     - NEARUSDT
     - ONDOUSDT
-    - ONUSDT
     - PAXGUSDT
     - PENGUUSDT
     - PUMPUSDT
-    - RIFUSDT
     - SOLUSDT
     - SUIUSDT
     - TAOUSDT
-    - TRUMPUSDT
     - TRXUSDT
-    - UBUSDT
     - UNIUSDT
     - WLDUSDT
+    - WLFIUSDT
     - XLMUSDT
     - XMRUSDT
+    - XPLUSDT
     - XRPUSDT
     - ZECUSDT
   boundary:
-    - ACEUSDT
-    - CRVUSDT
-    - HOMEUSDT
-    - SKYAIUSDT
-    - WLFIUSDT
+    - APTUSDT
+    - DEXEUSDT
+    - ETCUSDT
+    - HBARUSDT
+    - LDOUSDT
   probe:
+    - BSBUSDT
     - CAPUSDT
-    - CYSUSDT
-    - DOSUSDT
     - GRVTUSDT
+    - REUSDT
     - XAUTUSDT
   automation_enabled: true
   discovery_hour_utc: 23

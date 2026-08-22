@@ -2,8 +2,9 @@
 
 ## 本阶段目标
 
-本版本就是正式实验采集版本。新数据从空的 active 路径启动，不读取、转换或迁移旧 generation
-状态和 raw 数据；旧数据保存在隔离 archive。`6.2` 一次启动全部 60 个合约，不存在分级扩容配置。
+本版本就是正式实验采集版本。Vultr 从空的 active 路径启动，不读取、转换或迁移旧 generation
+状态。107 保留旧 raw 的原始字节，新 runtime 只按新 formal-start 处理后续日期。`7.0` 一次启动
+全部 60 个合约，不存在分级扩容配置。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
 ACK，并把重计算提交给 Slurm。正式采集过程中不依赖 GitHub，也不依赖 107 回传选币决策。
@@ -15,7 +16,7 @@ ACK，并把重计算提交给 Slurm。正式采集过程中不依赖 GitHub，�
 - `probe` 固定 5 个槽位，代表最新上市的合格永续合约；
 - 三个角色始终互斥，总数始终等于 60。
 
-新 `6.2` 由 [冻结证据](formal-universe-6.2-evidence.json) 记录，并在首次
+新 `7.0` 由 [冻结证据](formal-universe-7.0-evidence.json) 记录，并在首次
 启动必须用新的双重状态、14 日 Kline 和盘口证据验证已冻结的 50/5/5 全部仍通过角色硬门槛，
 并同时绑定离线 evidence hash 与实时 source hashes。任何成员失效或不再合格就拒绝写正式
 起点；瞬时盘口导致的合格成员内部排名变化不会擅自改写冻结名单。
@@ -96,7 +97,7 @@ collector 每 30 秒写 lease；若上次启动没有 clean shutdown，下次启
 4. discovery 和 clock 首次请求。
 
 随后写入 raw `universe_decision` 和 `FORMAL_COLLECTION_STARTED` 事件，强制 finalize writer，
-再持久化 `control/formal-start.json`。`6.2` 决策在写入前必须绑定上述双重状态响应和
+再持久化 `control/formal-start.json`。`7.0` 决策在写入前必须绑定上述双重状态响应和
 ticker 响应的 SHA-256。该事件时间之后的数据属于正式实验。24 小时资源观察是生产监控，
 不会清空或重启已经采集的数据。
 

@@ -26,8 +26,9 @@ command -v crontab flock sbatch ssh
 新装时使用 v0.3.7 的仓库目录、`ft-shadow-data-plane.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/ft-data-puller` 私钥。
 
-v0.3.7 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw/runtime 原地移动到
-`data/archive/pre-v0.3.5-*`，不删除；新 runtime/raw/derived 从空路径部署，禁止把旧文件混入新日期。
+v0.3.7 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw 保持原始字节和日期分区，
+不删除、不改写；旧 runtime/derived 移入 `data/archive/legacy-contract-*`。新 runtime/derived 从空路径
+部署，并只处理新 formal-start 之后的日期。
 
 ## 2. 归档旧实验并 clean start
 
@@ -44,8 +45,8 @@ pgrep -af ft-data-pull || true
 等待现有 pull 退出后，手工运行旧 `pull-once.sh`，直到连续一次出现
 `pull complete new_chunks=0 failures=0`。这一步必须在归档前完成，不能只看本地文件大小。
 
-从 Vultr 导出的旧 control/evidence/gap tar 传到 107 后，为旧实验创建时间戳 archive。以下操作
-全部是同一文件系统内的 rename，不复制或删除旧 raw：
+从 Vultr 导出的旧 control/evidence/gap tar 传到 107 后，为旧 runtime 创建时间戳 archive。以下
+操作不移动旧 raw，只记录其 immutable inventory；runtime/derived 使用同一文件系统 rename：
 
 ```bash
 BASE=/home/scc/pb24000367/Projects/bn
@@ -59,7 +60,6 @@ find "$BASE/data/raw" -type f -path '*/date=*/*' -printf '%p\n' \
   | sed -n 's#.*date=\([^/]*\)/.*#\1#p' | sort -u \
   >> "$ARCHIVE/inventory.txt"
 
-mv "$BASE/data/raw" "$ARCHIVE/raw"
 mv "$BASE/data/derived" "$ARCHIVE/derived"
 mv "$BASE/runtime" "$ARCHIVE/runtime"
 ```
@@ -70,11 +70,11 @@ mv "$BASE/runtime" "$ARCHIVE/runtime"
 ```bash
 (cd "$ARCHIVE" && sha256sum --check vultr-pre-v0.3.5-control.tar.gz.sha256)
 chmod -R a-w "$ARCHIVE"
-mkdir -p "$BASE/data/raw" "$BASE/data/derived"
+mkdir -p "$BASE/data/derived"
 ```
 
-新代码不扫描 `$BASE/data/archive`。旧数据需要旧版离线环境时，必须显式指向该 archive；不得把它
-链接回新的 `data/raw` 或 runtime。
+新代码不扫描 `$BASE/data/archive`。旧日期仍在 `$BASE/data/raw`，需要旧版离线环境时使用 archive
+中的 runtime；不得把旧 control 状态链接回新的 runtime。新旧实验以 formal-start 时间边界区分。
 
 ## 3. 校验并安装 v0.3.7
 

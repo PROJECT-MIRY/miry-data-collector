@@ -5,7 +5,7 @@
 1. 在 107 准备 `~/.ssh/ft-data-puller`，将公钥安全传给 Vultr 管理员；
 2. 在 Vultr 安装 `rsync`、`rrsync`、Docker 和 OpenSSH，运行 `deploy/vultr/install.sh`；
 3. Vultr 运行 `configure-rsync.sh` 安装 107 公钥，并独立核对 host-key 指纹；
-4. 107 把旧 raw/runtime 移入隔离 archive，再安装只支持当前合同的 v0.3.7 SIF；
+4. 107 保持旧 raw 原始字节不变，把旧 runtime 与控制证据移入只读 archive，再安装 v0.3.7 SIF；
 5. 107 配置 `central.yaml`，先用 `rsync --list-only` 和一次前台 pull 验证；
 6. 107 安装每分钟 cron，确认至少两个周期均成功；
 7. Vultr 写入 immutable image digest 和正式 60 币配置；
@@ -42,13 +42,13 @@ universe 状态。受控重启会产生真实且不可删除的 stop gap；重�
 v0.3.4 没有 central、rsync 或 raw schema 变化，107 不需要升级。
 
 从 v0.3.4 升级 v0.3.5 使用 clean active paths，不做运行时兼容或状态迁移。先让 107 拉完 Vultr
-ready，再停 cron；107 的约 91.4 GiB 旧 raw 与旧 runtime 原地移动到只读 archive，Vultr 的旧
-control/evidence/gap 也保存到该 archive。确认 archive 完整后才重置 Vultr spool/control，并以冻结的
-`6.2 / sequence 8` 60 币写入新 formal start。详细步骤见
+ready，再停 cron；107 的旧 raw 保持原始字节和日期分区不变，旧 runtime 与 Vultr 的旧
+control/evidence/gap 保存到只读 archive。确认 archive 完整后才重置 Vultr spool/control，并以冻结的
+`7.0 / sequence 8` 60 币写入新 formal start。详细步骤见
 [v0.3.5 结构化 universe clean start](v0.3.5-structured-universe-clean-start.md)。
 
 只有执行正式 clean start 时，才必须先停 collector 和 107 cron，解析并人工核对每个绝对路径。
-107 的旧 `runtime/raw/derived` 只能原地移动到只读 archive，不得删除；Vultr 的旧
+107 的旧 raw 不得删除或改写，旧 `runtime/derived` 只能原地移动到只读 archive；Vultr 的旧
 `ready/writing/control` 只有在 107 已拉空 ready、接收 control tar 且通过 SHA-256 校验后才能删除。
 仓库 checkout 和 SSH 私钥不在归档或删除范围内。
 

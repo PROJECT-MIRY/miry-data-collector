@@ -14,7 +14,7 @@ Vultr 负责采集、完整 UTC 日流动性证据、排名和增量换币。107
 ACK 和 Slurm 处理，不参与选币。成员不变的 UTC 日切不会停止数据源；替换一个币只在线更新
 这个币涉及的订阅和 OI 任务，其余 59 个币保持在线。
 
-当前 `6.2` 正式名单证据见
+当前 `7.0` 正式名单证据见
 [结构化 universe clean start](docs/v0.3.5-structured-universe-clean-start.md)，规则、
 边界语义和性能标准见 [实施合同](docs/implementation-plan.md)。部署入口：
 
@@ -57,8 +57,8 @@ v0.3.5 将 universe 身份拆成 `core_generation.candidate_revision`：50 个 c
 `core_generation` 并把 revision 归零，仅 boundary/probe 变化只增加 revision，成员完全不变不产生
 新版本。两个分量均为整数，`decision_sequence` 提供全序，`universe_hash` 继续绑定精确 50/5/5。
 本版本还修复 storage recovery 等待 source readiness 超时会终止 collector 的问题；超时后保持
-storage gap OPEN、清理半启动 sources，并在下一轮重试。旧 generation 数据只归档、不混入新
-数据路径；运行时代码不含兼容层。部署边界见
+storage gap OPEN、清理半启动 sources，并在下一轮重试。旧 generation raw 保持原始字节，
+运行时代码不含兼容层；新旧实验由 formal-start 时间边界区分。部署边界见
 [v0.3.5 结构化 universe clean start](docs/v0.3.5-structured-universe-clean-start.md)。
 
 v0.3.6 避免 107 每分钟对已经发布且 manifest 完全一致的历史 sealed day 重复扫描全部 raw

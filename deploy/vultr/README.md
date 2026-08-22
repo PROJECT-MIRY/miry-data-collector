@@ -146,7 +146,7 @@ FORMAL_COLLECTION_STARTED ... universe_version=<major.revision> decision_sequenc
 ```
 
 clean start 时 collector 会用最新 14 个完整 UTC 日、5 次 bookTicker 和 3 次 depth 验证冻结的
-`6.2 / sequence 8`；初始化不会读取任何旧 active、pending 或 generation 文件。
+`7.0 / sequence 8`；初始化不会读取任何旧 active、pending 或 generation 文件。
 若两次状态请求发现非交易合约，或任何已配置成员跌破角色硬门槛，它会拒绝写正式标记并退出。
 合格池内部因瞬时盘口产生的排名变化不会改写冻结名单。失败时必须重新冻结证据和配置，再执行
 clean start；不要绕过检查或减少总数。
@@ -243,8 +243,8 @@ collector status 周期，并确认 ready chunk 和 107 ACK 均持续推进。10
 
 从 v0.3.4 升级 v0.3.5 不做状态迁移。按
 [clean start 手册](../../docs/v0.3.5-structured-universe-clean-start.md) 先把所有 ready 拉到 107，
-再归档 107 旧 raw/runtime 和 Vultr 旧 control/evidence/gap。只有归档验证完成后才清空 Vultr active
-数据路径，以新配置直接启动 `6.2 / sequence 8`。代码不读取旧 generation 文件。
+保留 107 旧 raw 原始字节，再归档旧 runtime 和 Vultr 旧 control/evidence/gap。只有归档验证完成后才清空 Vultr active
+数据路径，以新配置直接启动 `7.0 / sequence 8`。代码不读取旧 generation 文件。
 
 从 v0.3.5 升级 v0.3.6 不改变 edge 配置、raw 或 universe 合同。107 必须升级，以避免每分钟 pull
 对字节完全一致、已经发布的历史 `SEALED.json` 重复哈希全部 chunk；某日第一次发布仍执行完整校验。

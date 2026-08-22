@@ -54,13 +54,13 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
         config.universe.core_generation,
         config.universe.candidate_revision,
         config.universe.decision_sequence,
-    ) == (6, 2, 8)
+    ) == (7, 0, 8)
     assert universe_hash(
         config.universe.core,
         config.universe.boundary,
         config.universe.probe,
-    ) == "439258f232c9cd174bc1a3900ea3802c3bc3f3e78381be620732dbd3de96a94c"
-    evidence = PROJECT_ROOT / "docs/formal-universe-6.2-evidence.json"
+    ) == "608e49c7199a3ab7cbc4c364c7126015ece7fbe4ccb9e9655de4204ede9ca22c"
+    evidence = PROJECT_ROOT / "docs/formal-universe-7.0-evidence.json"
     assert hashlib.sha256(evidence.read_bytes()).hexdigest() == (
         config.universe.bootstrap_evidence_sha256
     )
@@ -70,7 +70,7 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
         frozen["candidate_revision"],
         frozen["decision_sequence"],
         frozen["universe_version"],
-    ) == (6, 2, 8, "6.2")
+    ) == (7, 0, 8, "7.0")
     assert tuple(frozen["core"]) == config.universe.core
     assert tuple(frozen["boundary"]) == config.universe.boundary
     assert tuple(frozen["probe"]) == config.universe.probe

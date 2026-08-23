@@ -173,42 +173,84 @@ Vultr 在 `10:40:28.709Z` 至 `11:30:29.440Z` 的 50 分钟窗口中：
 将无 ACK 容量目标从当前约 13--19 小时提升到至少 24 小时。WebSocket 分片数测试应以
 `symbol-gap-seconds` 和 CPU 为主指标，不能用成交额变化代替负载测试。
 
-## v0.5.0 当前冲击复核（2026-08-23 17:33 UTC）
+## Binance 官方快照与 v0.5.0 链路复核（2026-08-23 17:43 UTC）
 
-最新生产 evaluation
-`/srv/miry-data-rsync/control/universe/evaluations/20260823T172031.956544Z.evaluation.json`
-仍将市场标记为 `ACTIVITY_SHOCK_PENDING`：525 个合约中，quote volume 变化因子为 `2.375`、
-breadth 为 `80.8%`；交易数变化因子为 `2.365`、breadth 为 `79.6%`。它满足广泛性和幅度，
-但只有最近 3 个完整日，尚未满足两个完整 7 日块，因此普通 universe 轮换继续冻结，不能把它声明为
-已确认的新 regime。
+### 当前市场不是 08-19 同级价格冲击，但活动仍处高位
 
-v0.5.0 在 `17:17--17:33 UTC` 得到 17 个完整 public minute：
+Binance 官方 `/fapi/v1/time` 在本轮查询返回 `2026-08-23T17:33:39.399Z`；按同刻
+[`exchangeInfo`][binance-exchange-info] 中 `TRADING + PERPETUAL + USDT` 筛选，官方
+[`24hr ticker`][binance-24h-ticker] 的 527 个合约合计滚动 24 小时 quote volume 为
+`40.230B USDT`、交易数为 `162.869M`。其中 299 涨、224 跌、4 平，价格变化中位数为
+`+0.356%`；81 个合约绝对涨跌至少 5%，24 个至少 10%。这不是方向一致的全市场价格危机，
+但尾部合约仍有明显活动。
+
+以仓库冻结的 [`formal-universe-7.0-evidence.json`](formal-universe-7.0-evidence.json) 精确筛选正式
+60 币，`2026-08-23T17:42:56Z` 的滚动 24 小时结果为 `33.956B USDT / 72.711M trades`，
+33 涨、27 跌，价格变化中位数 `+0.335%`，14 个绝对涨跌至少 5%，5 个至少 10%。与本文前述
+08-19 可比 59 币完整日的 `54.186B / 61.901M` 相比，当前名义成交额只有 `62.7%`，交易数却为
+`117.5%`。两个窗口分别是滚动 24 小时和 UTC 自然日，适合判断量级，不应解释为严格日内因果比较。
+
+BTC、ETH、SOL 提供了急性冲击的直观对照。Binance 官方 [`5m Kline`][binance-kline] 显示，
+08-19 三币合计 `45.020B USDT / 17.530M trades`，分别是当前滚动 24 小时
+`21.967B / 11.490M` 的 `2.05x / 1.53x`；当日三币涨幅为 `+7.13% / +17.48% / +10.83%`，
+当前则为 `+0.009% / +0.614% / +0.977%`。因此当前不是 08-19 同级急性行情，但较高的交易事件
+基线没有消失。
+
+生产 evaluation 在 `2026-08-23T17:20:31.956Z` 仍报告 `ACTIVITY_SHOCK_PENDING`：最近 3 个
+完整日相对 28 日基准的 quote volume/trade count 横截面因子为 `2.375/2.365`，breadth 为
+`80.8%/79.6%`。这与当前价格温和并不矛盾：前者描述多日成交活动相对旧基线的广泛抬升，后者描述
+滚动 24 小时价格方向。系统继续冻结普通成员轮换是正确行为。
+
+### v0.5.0 生产容量
+
+在 `17:17:40--17:42:40Z` 的稳态窗口和 27 个完整 public minute 中：
 
 | 指标 | 结果 |
 |---|---:|
-| public 消息/分钟 | P50 `164,310`；P95/峰值 `279,092` |
-| CPU | 平均 `0.509` core；P95/峰值 `0.627` core |
-| ingest events/s | P50 `2,977`；P95/峰值 `4,622` |
-| queue ratio | P50 `1.9%`；P95/峰值 `4.4%` |
-| event-loop lag | P50 `5.6ms`；P95/峰值 `37.7ms` |
-| RSS | P50 `277.7MiB`；峰值 `286.8MiB` |
-| compressed raw | 平均 `150.5KiB/s`；峰值 `236.0KiB/s` |
+| public 消息/分钟 | P50 `156,643`；P95 `238,487`；峰值 `279,092` |
+| CPU | 平均 `0.492` core；峰值分钟 `0.627` core |
+| ingest events | 平均 `2,971/s`；峰值 `4,622/s` |
+| compressed raw | 平均 `155.4KiB/s`；峰值 `236.0KiB/s` |
+| queue ratio | P50 `1.9%`；P95 `3.3%`；最大 `4.4%` |
+| event-loop lag | P95 `18.7ms`；最大 `37.7ms` |
+| audit / ping RTT | P95 `56.7ms / 101.0ms`；最大 `100.8ms / 169.1ms` |
+| RSS / cgroup memory | 最大约 `297.0MiB / 304.9MiB` |
 
-`17:32 UTC` 的实际 public 峰值为 `279,092/min`，达到旧生产记录 `293,892/min` 的 `95.0%`；
-对应下一次 collector status 为 CPU `0.627` core、queue `0.9%`、event-loop lag `6.2ms`，同一时段
-所有 audit 为 `27--48ms`，open gap、TCP timeout 和 retransmission 均为 0。这证明优化后的
-collector 已经实际承受接近旧记录的分钟峰值，不只是通过微基准。
+同一部署后的 53 个宿主机诊断样本覆盖 `17:16:05--17:43:30Z`：TCP retransmission 和 timeout
+增量均为 0，collector socket `Recv-Q` P95 为 `628B`、最大 `33,676B`，真实数据连接 TCP RTT
+P95/最大为 `13.11/18.13ms`，53 次 Binance HTTPS 探针全部成功。CPU PSI `avg10` P95/最大为
+`14.82%/18.07%`，但容器只在 3 个 period 被 throttle，累计 `0.485ms`；OOM 为 0。启动初期两个
+open-gap 诊断样本对应唯一一次 v0.5.0 受控部署 gap（`75.596s`），其后 connection failure 为 0，
+当前 open gap 为 0。
 
-107 最近 20 轮共验证并 ACK `198,131,392` bytes，实际传输阶段吞吐为 `704.3KiB/s`，同期 raw
-生成速率为 `161.2KiB/s`，约有 `4.37x` 吞吐余量；Vultr 最新
-`ready_manifests_remaining=0`。当前 10GiB spool 上限按平均生成速率约提供 `18.1h` 无 ACK
-缓冲，按观测 raw 峰值约 `12.1h`。若把 8 月 19 日两小时交易数代理的 `1.30--1.36x` 负载差距
-作用于当前峰值，CPU 线性外推约为 `0.82--0.85` core，而无 ACK 缓冲降到约 `8.9--9.3h`；该外推
-不是完整 replay 证明。
+107 在北京时间 `01:16:44--01:43:11` 完成 28 轮 pull，共校验并 ACK `274,502,097` bytes，
+`failures=0`。实际 rsync 阶段平均约 `625KiB/s`，按整段墙钟折算约 `168.9KiB/s`，高于同期 raw
+生成的 `155.4KiB/s`；Vultr `ready_manifests_remaining=0`，因此当前 backlog 正在及时清空。
+Vultr 可用磁盘约 `12.37GiB`，但 10GiB spool 上限仍只提供约 12--18 小时无 ACK 缓冲，达不到
+“冲击与 107 失联同时持续 24 小时”的目标。
 
-因此当前部署已经证明可以处理接近既往生产记录的短时冲击，并且会对网络/sequence 故障显式记 gap；
-但“无 gap 承受 8 月 19 日同级两小时危机”仍未被证明。剩余门禁是 v0.5.0 满 24 小时生产证据、
-保留真实消息结构的 `1.4x` 受限 replay，以及冲击和 107 失联同时发生时至少 24 小时的 spool 容量。
+### 协议容量与最终判断
+
+Binance 官方 [WebSocket Connect][binance-ws-connect] 合同要求使用 `/public`、`/market` 或
+`/private` 路由，单连接 24 小时强制断开、最多 1,024 streams、client-to-server 最多 10 条消息/秒，
+并规定 3 分钟 Ping 和 10 分钟 Pong deadline。生产当前使用
+`wss://fstream.binance.com/public/stream` 与 `.../market/stream`；4 条 public route 的订阅数为
+`28/28/32/32`，market route 为 `181`，均远低于 1,024。配置中的
+`connection_rotation_seconds=82800` 会在 23 小时提前轮换，见
+[`edge.yaml.example`](../deploy/vultr/edge.yaml.example) 和
+[`sources.py`](../src/miry/collector/sources.py)。所以当前风险不是 Binance 协议数量上限。
+
+综合结论是：**v0.5.0 可以继续正式采集，也已经实测承受接近此前生产记录的单分钟流量峰值；但还不能
+宣称可以无 gap 承受 08-19 同级、持续两小时的市场危机。** 当前峰值时 CPU、queue、event-loop、
+socket backlog 和网络均有余量，说明热路径优化有效；剩余不确定性是 08-19 没有同口径真实 WebSocket
+消息率、v0.5.0 观察窗口尚不足 24 小时，以及 107 完全失联时 spool 不足 24 小时。正式“危机通过”
+仍应以 24 小时生产分位数和保留真实消息结构的 `1.4x` 受限 replay 为门禁，不能用 Kline 交易数的
+线性外推替代。
+
+[binance-exchange-info]: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Exchange-Information
+[binance-24h-ticker]: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/24hr-Ticker-Price-Change-Statistics
+[binance-kline]: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Kline-Candlestick-Data
+[binance-ws-connect]: https://developers.binance.com/en/docs/products/derivatives-trading-usds-futures/websocket-market-streams/Connect
 
 ## 限制
 

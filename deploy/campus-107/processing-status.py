@@ -65,6 +65,10 @@ def main() -> None:
             final = "processed"
         elif (quality / "_QUALITY_REJECTED.json").is_file():
             final = "rejected"
+        elif l2_done == 60 and any(
+            path.stat().st_size == 0 for path in quality.glob("symbol=*/l2-validity.jsonl")
+        ):
+            final = "rejected(empty)"
         else:
             final = aggregate_state(fin_jobs)
 

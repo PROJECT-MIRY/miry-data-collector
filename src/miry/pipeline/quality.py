@@ -46,7 +46,6 @@ def finalize_day(
         derived_root / "quality" / f"collector={collector_id}" / f"date={utc_date.isoformat()}"
     )
     missing = []
-    empty = []
     coverage: dict[str, dict[str, int | str]] = {}
     rejected: list[str] = []
     gap_path = quality_root / "transport-gaps.jsonl"
@@ -56,9 +55,6 @@ def finalize_day(
         checkpoint_path = symbol_root / "l2-checkpoint.json"
         if not validity_path.exists() or not checkpoint_path.exists():
             missing.append(symbol)
-            continue
-        if validity_path.stat().st_size == 0:
-            empty.append(symbol)
             continue
         valid_intervals = _validate_validity(validity_path, utc_date=utc_date)
         checkpoint = L2Checkpoint.model_validate_json(checkpoint_path.read_bytes())
@@ -119,8 +115,6 @@ def finalize_day(
             rejected.append(symbol)
     if missing:
         raise FileNotFoundError(f"missing L2 outputs: {','.join(missing)}")
-    if empty:
-        raise ValueError(f"empty L2 validity: {','.join(empty)}")
     quality_marker = {
         "schema_version": 1,
         "collector_id": collector_id,

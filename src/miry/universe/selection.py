@@ -374,7 +374,7 @@ def write_formal_bundle(
     atomic_write_bytes(output_dir / "decision.json", canonical_json_bytes(decision), mode=0o644)
     atomic_write_bytes(
         output_dir / "formal-60.members.txt",
-        ("\n".join(decision.members) + "\n").encode("ascii"),
+        ("\n".join(decision.members) + "\n").encode("utf-8"),
         mode=0o644,
     )
     for name, content in (

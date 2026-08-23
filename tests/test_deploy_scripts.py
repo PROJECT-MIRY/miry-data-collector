@@ -49,6 +49,7 @@ def test_project_and_release_identity_use_miry_name() -> None:
         "miry-data-select",
         "miry-data-release",
         "miry-data-retain",
+        "miry-data-symbols",
     }
     assert readme.startswith("# miry-data-collector\n")
     assert "ghcr.io/${{ github.repository }}" in release
@@ -61,6 +62,12 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     service = (PROJECT_ROOT / "deploy/vultr/systemd/miry-data-collector.service").read_text(
         encoding="ascii"
     )
+    diagnostics_service = (
+        PROJECT_ROOT / "deploy/vultr/systemd/miry-data-diagnostics.service"
+    ).read_text(encoding="ascii")
+    diagnostics_timer = (
+        PROJECT_ROOT / "deploy/vultr/systemd/miry-data-diagnostics.timer"
+    ).read_text(encoding="ascii")
 
     role_sizes = (
         len(config.universe.core),
@@ -140,6 +147,8 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert "pids_limit: 256" in compose
     assert "--exit-code-from collector" in service
     assert "SuccessExitStatus=130" in service
+    assert "diagnostics.py" in diagnostics_service
+    assert "OnUnitActiveSec=30s" in diagnostics_timer
 
 
 @pytest.mark.parametrize(
@@ -347,7 +356,7 @@ def test_submit_day_rejects_out_of_order_checkpoint_processing(tmp_path: Path) -
     )
 
     assert rejected.returncode == 1
-    assert "previous UTC day must be processed first" in rejected.stderr
+    assert "previous UTC day has no terminal quality result" in rejected.stderr
     assert not sbatch_log.exists()
 
     previous_processed = (
@@ -366,17 +375,67 @@ def test_submit_day_rejects_out_of_order_checkpoint_processing(tmp_path: Path) -
     assert accepted.returncode == 0, accepted.stderr
 
 
+def test_submit_day_accepts_previous_quality_rejection(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    _write_fake_sbatch(fake_bin / "sbatch")
+    processing_env = _write_processing_env(tmp_path, concurrency=8)
+    symbols = tmp_path / "symbols.txt"
+    _write_symbols(symbols)
+    previous_raw = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-09/SEALED.json"
+    previous_raw.parent.mkdir(parents=True)
+    previous_raw.write_text("{}", encoding="ascii")
+    previous_rejected = (
+        tmp_path / "derived/quality/collector=tokyo01/date=2026-08-09/_QUALITY_REJECTED.json"
+    )
+    previous_rejected.parent.mkdir(parents=True)
+    previous_rejected.write_text("{}", encoding="ascii")
+
+    result = subprocess.run(
+        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIRY_PROCESSING_ENV": str(processing_env),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SBATCH_LOG": str(sbatch_log),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def _write_processing_env(tmp_path: Path, *, concurrency: int) -> Path:
+    apptainer = tmp_path / "apptainer"
+    apptainer.write_text(
+        """#!/bin/sh
+set -eu
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = --input ]; then
+        cat "$2"
+        exit 0
+    fi
+    shift
+done
+exit 1
+""",
+        encoding="ascii",
+    )
+    apptainer.chmod(0o755)
     path = tmp_path / "processing.env"
     path.write_text(
         "\n".join(
             (
-                f"MIRY_APPTAINER={tmp_path / 'apptainer'}",
+                f"MIRY_APPTAINER={apptainer}",
                 f"MIRY_DATA_IMAGE={tmp_path / 'release.sandbox'}",
                 f"MIRY_RAW_ROOT={tmp_path / 'raw'}",
                 f"MIRY_DERIVED_ROOT={tmp_path / 'derived'}",
                 "MIRY_COLLECTOR=tokyo01",
                 f"MIRY_L2_CONCURRENCY={concurrency}",
+                f"MIRY_SYMBOLS_ROOT={tmp_path / 'canonical-symbols'}",
                 "",
             )
         ),

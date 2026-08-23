@@ -1,0 +1,11 @@
+[Unit]
+Description=sample miry collector host diagnostics every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=miry-data-diagnostics.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=miry collector host diagnostics sample
+Requires=docker.service
+After=docker.service miry-data-collector.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/miry-data-collector/deploy/vultr/diagnostics.py
+Nice=10
+CPUWeight=10
+IOWeight=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/miry-data-collector

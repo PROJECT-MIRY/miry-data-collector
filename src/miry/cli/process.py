@@ -8,6 +8,7 @@ from pathlib import Path
 import orjson
 
 from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes
+from miry.contracts.symbols import validate_exchange_symbol
 from miry.pipeline.clock import build_clock_quality
 from miry.pipeline.d0 import build_d0_audit
 from miry.pipeline.gaps import build_transport_gap_ledger
@@ -58,7 +59,7 @@ def main() -> None:
             derived_root=args.derived_root,
             collector_id=args.collector,
             utc_date=args.date,
-            exchange_symbol=args.symbol.upper(),
+            exchange_symbol=validate_exchange_symbol(args.symbol.upper()),
         ).run()
         logging.info("L2 complete state_changes=%d valid_intervals=%d", changes, intervals)
     elif args.command == "d0-audit":
@@ -69,7 +70,15 @@ def main() -> None:
         )
         logging.info("D0 audit complete path=%s", path)
     else:
-        symbols = tuple(sorted(set(value.upper() for value in args.symbols.split(",") if value)))
+        symbols = tuple(
+            sorted(
+                {
+                    validate_exchange_symbol(value.upper())
+                    for value in args.symbols.split(",")
+                    if value
+                }
+            )
+        )
         _finalize(
             args.derived_root,
             collector_id=args.collector,

@@ -9,7 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SYMBOL_PATTERN = re.compile(r"^[A-Z0-9]{1,30}$")
+from miry.contracts.symbols import is_exchange_symbol
+
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{8,160}$")
 
@@ -90,7 +91,7 @@ class RawEvent:
     def __post_init__(self) -> None:
         if self.schema_version != 1:
             raise ValueError("raw event requires schema_version=1")
-        if self.exchange_symbol is not None and not SYMBOL_PATTERN.fullmatch(self.exchange_symbol):
+        if self.exchange_symbol is not None and not is_exchange_symbol(self.exchange_symbol):
             raise ValueError("invalid exchange_symbol")
         if not self.collector_id or not self.boot_id or not self.segment_id:
             raise ValueError("collector, boot, and segment identities are required")
@@ -271,7 +272,7 @@ class GapEvent(FrozenModel):
     @field_validator("exchange_symbols")
     @classmethod
     def validate_symbols(cls, values: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not SYMBOL_PATTERN.fullmatch(value) for value in values):
+        if any(not is_exchange_symbol(value) for value in values):
             raise ValueError("gap contains an invalid exchange symbol")
         return values
 
@@ -310,7 +311,7 @@ class UniverseDecision(FrozenModel):
     @classmethod
     def validate_members(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         normalized = tuple(value.upper() for value in values)
-        if any(not SYMBOL_PATTERN.fullmatch(value) for value in normalized):
+        if any(not is_exchange_symbol(value) for value in normalized):
             raise ValueError("universe contains an invalid exchange symbol")
         if len(normalized) != len(set(normalized)):
             raise ValueError("universe role contains duplicate members")
@@ -370,7 +371,7 @@ class CandidateOverride(FrozenModel):
     @classmethod
     def validate_members(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         normalized = tuple(sorted(value.upper() for value in values))
-        if any(not SYMBOL_PATTERN.fullmatch(value) for value in normalized):
+        if any(not is_exchange_symbol(value) for value in normalized):
             raise ValueError("override contains an invalid exchange symbol")
         if len(set(normalized)) != len(normalized):
             raise ValueError("override role contains duplicate members")

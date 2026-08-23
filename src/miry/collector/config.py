@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from miry.contracts.models import HASH_PATTERN, SYMBOL_PATTERN
+from miry.contracts.models import HASH_PATTERN
+from miry.contracts.symbols import is_exchange_symbol
 
 if TYPE_CHECKING:
     from miry.universe.models import RollingPolicy
@@ -55,7 +56,7 @@ class UniversePolicyConfig(BaseModel):
     @classmethod
     def validate_role(cls, values: tuple[str, ...]) -> tuple[str, ...]:
         normalized = tuple(sorted(value.upper() for value in values))
-        if any(not SYMBOL_PATTERN.fullmatch(value) for value in normalized):
+        if any(not is_exchange_symbol(value) for value in normalized):
             raise ValueError("universe role contains an invalid symbol")
         if len(set(normalized)) != len(normalized):
             raise ValueError("universe role contains duplicates")
@@ -118,7 +119,7 @@ class CollectorConfig(BaseModel):
     public_ws_url: str
     market_ws_url: str
     rest_url: str
-    public_connection_shards: int = Field(default=4, ge=1, le=4)
+    public_connection_shards: int = Field(default=4, ge=1, le=8)
     message_rates: dict[str, int] = Field(default_factory=dict)
     connection_rotation_seconds: int = Field(default=82_800, ge=3_600, le=86_000)
     connection_overlap_seconds: int = Field(default=15, ge=1, le=120)
@@ -160,7 +161,7 @@ class CollectorConfig(BaseModel):
         normalized = {symbol.upper(): rate for symbol, rate in values.items()}
         if len(normalized) != len(values):
             raise ValueError("message rates contain duplicate symbols")
-        if any(not SYMBOL_PATTERN.fullmatch(symbol) for symbol in normalized):
+        if any(not is_exchange_symbol(symbol) for symbol in normalized):
             raise ValueError("message rates contain an invalid symbol")
         if any(rate <= 0 for rate in normalized.values()):
             raise ValueError("message rates must be positive")

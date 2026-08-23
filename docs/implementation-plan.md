@@ -1,4 +1,4 @@
-# v0.4.0 正式采集实施合同
+# v0.4.1 正式采集实施合同
 
 ## 本阶段目标
 
@@ -142,8 +142,8 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 目标机器为 1 vCPU、1GiB RAM、25GB 磁盘，不允许通过减少币数或降低采集频率达标。
 
 - Docker：`1.00 CPU`、`768MiB`、`256 PIDs`；
-- 4 个 public shards，初始按生产消息率分配；运行期只在 UTC 日切且具备 24 个完整小时证据时
-  执行一次无重启再均衡；
+- 正式基线使用 4 个 public shards；配置支持 8 条受控 A/B，满 24 个完整小时证据后才切换；
+  运行期只在 UTC 日切执行一次无重启再均衡；
 - WebSocket queue 为 16，单消息上限 2MiB；
 - 1,000 档 snapshot 起点全局最小间隔 0.75 秒、最多 4 个 HTTP 在途，持续上限约 1,600
   request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；

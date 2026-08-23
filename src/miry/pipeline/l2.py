@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from miry.contracts.models import GapEvent, GapState, StreamType
 from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes
+from miry.contracts.symbols import validate_exchange_symbol
 
 
 class L2State(StrEnum):
@@ -257,6 +258,7 @@ class L2DayReconstructor:
         utc_date: date,
         exchange_symbol: str,
     ) -> None:
+        exchange_symbol = validate_exchange_symbol(exchange_symbol)
         self._typed_root = (
             derived_root / "typed" / f"collector={collector_id}" / f"date={utc_date.isoformat()}"
         )

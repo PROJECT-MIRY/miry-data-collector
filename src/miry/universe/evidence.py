@@ -7,7 +7,7 @@ from typing import Any
 
 import orjson
 
-from miry.contracts.models import SYMBOL_PATTERN
+from miry.contracts.symbols import is_exchange_symbol
 from miry.universe.models import DiscoverySnapshot, RollingPolicy
 from miry.universe.ranking import rank_cross_section
 from miry.universe.regime import (
@@ -475,7 +475,7 @@ def _eligibility_reason(raw: dict[str, Any], symbol: str) -> str | None:
         return "not_perpetual"
     if raw.get("quoteAsset") != "USDT" or raw.get("marginAsset") != "USDT":
         return "not_usdt"
-    if not SYMBOL_PATTERN.fullmatch(symbol):
+    if not is_exchange_symbol(symbol):
         return "invalid_symbol"
     return None
 

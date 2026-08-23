@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.4.0 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.4.1 collector。数据根为
 `/srv/miry-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -178,6 +178,19 @@ sudo find /srv/miry-data-rsync/control/rejected-acks -maxdepth 1 -type f -print
 journalctl -u miry-data-collector.service --since '24 hours ago' \
   | grep -E 'GAP|collector status|FORMAL_COLLECTION_STARTED|planned universe'
 ```
+
+启用宿主机诊断 timer：
+
+```bash
+sudo systemctl enable --now miry-data-diagnostics.timer
+sudo systemctl start miry-data-diagnostics.service
+sudo systemctl status miry-data-diagnostics.timer --no-pager
+sudo tail -n 1 /var/log/miry-data-collector/diagnostics/$(date -u +%F).jsonl | jq .
+```
+
+采样器每 30 秒记录 collector netns TCP 计数与 socket RTT、cgroup CPU throttle/memory events、
+宿主机 PSI、Binance HTTPS 探针、transfer status、open-gap 数和磁盘。日志按 UTC 日分文件并保留
+14 天；它不进入 raw，也不向 107 同步。
 
 `control/universe/observations` 保存每日增量 Kline 和盘口证据，`evaluations` 保存 mature/recent
 池数量、market context 与冻结原因，`decisions` 保存实际 decision。mature 池小于 65 会报警。正常日切没有

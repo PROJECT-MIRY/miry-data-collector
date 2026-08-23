@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.4.0 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.4.1 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -131,3 +131,11 @@ v0.4.0 完成运行接口改名：命令统一为 `miry-data-*`，环境变量�
 `miry-data-collector.service`、`/opt/miry-data-collector`、`/etc/miry-data-collector` 和
 `/srv/miry-data-rsync`。107 的永久 `data/raw`、`data/derived`、transfer ledger 以及 Vultr
 现有 spool 均原地保留；部署只重命名目录和配置引用，不重写正式数据。
+
+v0.4.1 为 4/8 public shard 生产 A/B 增加有界分片、宿主机 TCP/cgroup/PSI/HTTPS 诊断采样和
+peer/订阅/snapshot 延迟日志。正式配置仍以 4 shards 开始，满 24 小时证据后才允许受控切到 8；
+8-shard 最大 route 限制为 9 币。107 的质量拒绝日现在是可继续 checkpoint 链的终态，不再永久
+阻断后续日期；质量成功门槛和 raw 合同不变。实验门禁见
+[4/8 shard A/B](docs/shard-ab-2026-08-23.md)。
+v0.4.1 支持 Binance 真实的 Unicode canonical symbol，例如 `币安人生USDT`；安全验证仍拒绝空白、
+路径分隔符、控制字符和非 canonical 大小写。

@@ -193,6 +193,7 @@ class BinanceWebSocketConnection:
         subscription_proven_realtime_ns: int | None = None
         pending_audit_started: float | None = None
         consecutive_audit_failures = 0
+        initial_subscription_started = time.monotonic()
         try:
             async with connect(
                 self._url,
@@ -202,6 +203,13 @@ class BinanceWebSocketConnection:
                 max_size=self._max_message_bytes,
                 close_timeout=10,
             ) as websocket:
+                peer = _peer_text(getattr(websocket, "remote_address", None))
+                logger.info(
+                    "websocket connected connection_id=%s peer=%s subscriptions=%d",
+                    self._identity.connection_id,
+                    peer,
+                    len(self._subscriptions),
+                )
                 await websocket.send(
                     orjson.dumps(
                         {
@@ -380,6 +388,12 @@ class BinanceWebSocketConnection:
                         self._initial_subscription_acknowledged = True
                         self._maybe_mark_transport_ready()
                         subscription_proven_realtime_ns = realtime_ns
+                        logger.info(
+                            "subscription ready connection_id=%s peer=%s rtt_ms=%.3f",
+                            self._identity.connection_id,
+                            peer,
+                            (time.monotonic() - initial_subscription_started) * 1_000,
+                        )
                         if self._snapshot_requests:
                             snapshot_task = asyncio.create_task(
                                 self._fetch_snapshots(),
@@ -392,6 +406,7 @@ class BinanceWebSocketConnection:
                             raise OSError(f"Binance subscription rejected: {decoded.message}")
                         response_id = decoded.message.get("id")
                         if isinstance(response_id, int) and response_id in pending_audits:
+                            audit_started = pending_audit_started
                             pending_audits.remove(response_id)
                             pending_audit_started = None
                             result = decoded.message.get("result")
@@ -413,6 +428,19 @@ class BinanceWebSocketConnection:
                                 )
                             consecutive_audit_failures = 0
                             subscription_proven_realtime_ns = realtime_ns
+                            logger.info(
+                                "subscription audit connection_id=%s peer=%s rtt_ms=%.3f "
+                                "ping_rtt_ms=%s subscriptions=%d",
+                                self._identity.connection_id,
+                                peer,
+                                (
+                                    (time.monotonic() - audit_started) * 1_000
+                                    if audit_started is not None
+                                    else 0.0
+                                ),
+                                _latency_ms(getattr(websocket, "latency", None)),
+                                len(actual),
+                            )
                         if isinstance(response_id, int) and response_id in pending_updates:
                             pending = pending_updates.pop(response_id)
                             pending.remaining_ids.discard(response_id)
@@ -507,6 +535,15 @@ class BinanceWebSocketConnection:
                     request_realtime_ns=requested_at,
                 )
                 await self._ingest.put(event)
+                logger.info(
+                    "snapshot fetched connection_id=%s symbol=%s stream=%s latency_ms=%.3f "
+                    "attempt=%d",
+                    self._identity.connection_id,
+                    symbol,
+                    stream_type.value,
+                    (observed_at - requested_at) / 1_000_000,
+                    attempt + 1,
+                )
                 self._snapshot_pending.discard((symbol, stream_type))
                 return
             except (aiohttp.ClientError, TimeoutError):
@@ -555,6 +592,18 @@ class BinanceWebSocketConnection:
         self._resync_tasks[key] = asyncio.create_task(
             reanchor(), name=f"depth-reanchor-{self._identity.connection_id}-{symbol}"
         )
+
+
+def _peer_text(value: object) -> str:
+    if isinstance(value, tuple) and len(value) >= 2:
+        return f"{value[0]}:{value[1]}"
+    return str(value) if value is not None else "unknown"
+
+
+def _latency_ms(value: object) -> str:
+    if isinstance(value, int | float):
+        return f"{value * 1_000:.3f}"
+    return "unknown"
 
 
 def public_subscriptions(instruments: tuple[str, ...], *, d0_enabled: bool) -> tuple[str, ...]:

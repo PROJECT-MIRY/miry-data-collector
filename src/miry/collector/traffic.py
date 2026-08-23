@@ -11,8 +11,8 @@ from typing import Any
 
 import orjson
 
-from miry.contracts.models import SYMBOL_PATTERN
 from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes
+from miry.contracts.symbols import is_exchange_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,7 @@ def _parse_blocks(payload: Any) -> list[MessageRateBlock]:
         for symbol, rate in raw_rates.items():
             if (
                 not isinstance(symbol, str)
-                or not SYMBOL_PATTERN.fullmatch(symbol)
+                or not is_exchange_symbol(symbol)
                 or not isinstance(rate, int)
                 or isinstance(rate, bool)
                 or rate <= 0

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from universe_fixtures import formal_roles, liquidity_snapshot, symbols
@@ -16,6 +17,7 @@ from miry.universe.regime import MarketState
 from miry.universe.selection import (
     select_bootstrap_universe,
     select_rolling_universe,
+    write_formal_bundle,
 )
 
 
@@ -29,6 +31,18 @@ def test_bootstrap_selects_fifty_five_five_from_complete_evidence() -> None:
     assert (result.core, result.boundary, result.probe) == formal_roles()
     assert len(set((*result.core, *result.boundary, *result.probe))) == 60
     assert len(result.source_hashes) == 5
+
+
+def test_formal_bundle_writes_chinese_canonical_symbol_as_utf8(tmp_path: Path) -> None:
+    observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
+    core, boundary, probe = formal_roles()
+    core = tuple(sorted(("币安人生USDT", *core[1:])))
+    decision = _decision(core, boundary, probe, observed)
+
+    write_formal_bundle(decision, tmp_path, snapshot=liquidity_snapshot(observed))
+
+    members = (tmp_path / "formal-60.members.txt").read_text(encoding="utf-8").splitlines()
+    assert "币安人生USDT" in members
 
 
 def test_bootstrap_replaces_recent_candidate_without_complete_history() -> None:

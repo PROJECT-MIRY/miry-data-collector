@@ -72,6 +72,27 @@ def test_traffic_sharder_balances_rates_and_preserves_existing_routes() -> None:
     )
 
 
+def test_eight_shards_bound_fault_scope_and_snapshot_wait() -> None:
+    raw = yaml.safe_load((PROJECT_ROOT / "deploy/vultr/edge.yaml.example").read_text())
+    raw["public_connection_shards"] = 8
+    config = CollectorConfig.model_validate(raw)
+
+    shards = TrafficSharder(8, config.message_rates).shards(config.universe.members)
+    route_rates = [
+        sum(config.message_rates[symbol] for symbol in shard) for shard in shards
+    ]
+
+    assert len(shards) == 8
+    assert sum(map(len, shards)) == 60
+    four_shards = TrafficSharder(4, config.message_rates).shards(config.universe.members)
+    four_route_max = max(
+        sum(config.message_rates[symbol] for symbol in shard) for shard in four_shards
+    )
+    assert max(map(len, shards)) <= 9
+    assert max(route_rates) < four_route_max
+    assert (max(map(len, shards)) - 1) * config.snapshot_request_interval_seconds <= 6
+
+
 def test_observed_rates_require_24_complete_blocks_and_keep_24(tmp_path: Path) -> None:
     clock = FakeClock()
     recorder = PublicTrafficRecorder(

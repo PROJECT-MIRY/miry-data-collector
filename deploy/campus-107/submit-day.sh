@@ -38,11 +38,26 @@ set +a
 : "${MIRY_COLLECTOR:?MIRY_COLLECTOR is required}"
 : "${MIRY_L2_CONCURRENCY:?MIRY_L2_CONCURRENCY is required}"
 
+canonical_root=${MIRY_SYMBOLS_ROOT:-$(readlink -f "$script_dir/../..")/symbols}
+mkdir -p "$canonical_root"
+canonical_symbols="$canonical_root/$utc_date.canonical.txt"
+canonical_partial=$(mktemp "$canonical_symbols.XXXXXX")
+trap 'rm -f "$canonical_partial"' EXIT HUP INT TERM
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" \
+    miry-data-symbols \
+    --input "$symbols_file" \
+    --count 60 \
+    > "$canonical_partial"
+mv "$canonical_partial" "$canonical_symbols"
+trap - EXIT HUP INT TERM
+symbols_file=$canonical_symbols
+
 previous_date=$(date -u -d "$utc_date -1 day" +%F)
 previous_raw="$MIRY_RAW_ROOT/collector=$MIRY_COLLECTOR/day-manifests/date=$previous_date/SEALED.json"
 previous_processed="$MIRY_DERIVED_ROOT/quality/collector=$MIRY_COLLECTOR/date=$previous_date/_PROCESSED.json"
-if [ -e "$previous_raw" ] && [ ! -s "$previous_processed" ]; then
-    echo "previous UTC day must be processed first: $previous_date" >&2
+previous_rejected="$MIRY_DERIVED_ROOT/quality/collector=$MIRY_COLLECTOR/date=$previous_date/_QUALITY_REJECTED.json"
+if [ -e "$previous_raw" ] && [ ! -s "$previous_processed" ] && [ ! -s "$previous_rejected" ]; then
+    echo "previous UTC day has no terminal quality result: $previous_date" >&2
     exit 1
 fi
 
@@ -53,10 +68,10 @@ case "$MIRY_L2_CONCURRENCY" in
         ;;
 esac
 
-if ! awk 'NF != 1 || $1 !~ /^[A-Z0-9]{1,30}$/ || seen[$1]++ { exit 1 } END { if (NR != 60) exit 1 }' \
+if ! awk 'NF != 1 || seen[$0]++ { exit 1 } END { if (NR != 60) exit 1 }' \
     "$symbols_file"
 then
-    echo "symbols must contain exactly 60 unique uppercase Binance symbols, one per line" >&2
+    echo "symbols must contain exactly 60 unique canonical Binance symbols, one per line" >&2
     exit 1
 fi
 

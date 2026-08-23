@@ -13,7 +13,8 @@ RUN apt-get update \
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
-RUN python -m pip install --no-cache-dir .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --retries 10 --timeout 300 .
 
 USER 10001:10001
 ENTRYPOINT ["miry-data-edge"]

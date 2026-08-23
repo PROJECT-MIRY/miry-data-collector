@@ -1,4 +1,4 @@
-# v0.4.0 端到端部署
+# v0.4.1 端到端部署
 
 正式链路为：
 
@@ -33,7 +33,8 @@ Binance -> Vultr collector -> /srv/miry-data-rsync/ready
    `miry-data-collector.service`；
 8. 写入 release 的 immutable OCI digest，只启动一次 collector；
 9. 等待全部 realtime source ready 和受控 stop gap 关闭，再恢复 107 cron；
-10. 验证 ACK/REMOTE_GC、raw 增长、transfer status、资源指标和 open gap。
+10. 启用 `miry-data-diagnostics.timer`，验证首条宿主机诊断 JSONL 无错误；
+11. 验证 ACK/REMOTE_GC、raw 增长、transfer status、资源指标和 open gap。
 
 ## 验收
 

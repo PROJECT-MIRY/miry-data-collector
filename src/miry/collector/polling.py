@@ -20,8 +20,9 @@ from miry.collector.scheduling import advance_fixed_deadline, staggered_offsets
 from miry.collector.websocket import (
     SourceIdentity,
 )
-from miry.contracts.models import SYMBOL_PATTERN, GapReason, StreamType
+from miry.contracts.models import GapReason, StreamType
 from miry.contracts.serde import canonical_json_bytes, sha256_bytes
+from miry.contracts.symbols import is_exchange_symbol
 from miry.universe.models import DiscoverySnapshot
 from miry.universe.selection import liquidity_validation_symbols
 
@@ -508,7 +509,7 @@ def _eligible_instruments(exchange_info: bytes) -> dict[str, int]:
             and item.get("contractType") == "PERPETUAL"
             and item.get("quoteAsset") == "USDT"
             and item.get("marginAsset") == "USDT"
-            and SYMBOL_PATTERN.fullmatch(symbol)
+            and is_exchange_symbol(symbol)
         ):
             try:
                 onboard_ms = int(str(item["onboardDate"]))

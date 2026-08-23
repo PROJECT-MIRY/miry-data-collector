@@ -17,6 +17,7 @@ class TrafficSharder:
             return ()
         initial_assignment = not self._assignments
         active = set(instruments)
+        max_symbols = (len(active) + shard_count - 1) // shard_count + 1
         self._assignments = {
             symbol: shard
             for symbol, shard in self._assignments.items()
@@ -32,7 +33,10 @@ class TrafficSharder:
             key=lambda symbol: (-self._message_rate(symbol), symbol),
         )
         for symbol in unassigned:
-            shard = min(range(shard_count), key=lambda index: (loads[index], index))
+            available = [
+                index for index in range(shard_count) if len(shards[index]) < max_symbols
+            ]
+            shard = min(available, key=lambda index: (loads[index], index))
             self._assignments[symbol] = shard
             shards[shard].append(symbol)
             loads[shard] += self._message_rate(symbol)

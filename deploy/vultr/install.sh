@@ -13,6 +13,7 @@ collector_id=10001
 deploy_root=/opt/miry-data-collector/deploy/vultr
 config_root=/etc/miry-data-collector
 data_root=/srv/miry-data-rsync
+diagnostics_root=/var/log/miry-data-collector/diagnostics
 
 for command_name in rsync rrsync; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -55,6 +56,7 @@ fi
 usermod --shell /bin/sh "$collector_user"
 
 install -d -o root -g root -m 755 "$data_root"
+install -d -o root -g root -m 750 "$diagnostics_root"
 for relative_path in \
     ready \
     writing \
@@ -81,6 +83,7 @@ install -m 644 "$script_dir/alert.env.example" "$deploy_root/alert.env.example"
 install -m 555 "$script_dir/verify.sh" "$deploy_root/verify.sh"
 install -m 555 "$script_dir/configure-rsync.sh" "$deploy_root/configure-rsync.sh"
 install -m 555 "$script_dir/rsync_gateway.py" "$deploy_root/rsync_gateway.py"
+install -m 555 "$script_dir/diagnostics.py" "$deploy_root/diagnostics.py"
 install -m 644 \
     "$script_dir/systemd/miry-data-collector.service" \
     "$deploy_root/systemd/miry-data-collector.service"
@@ -88,11 +91,23 @@ install -m 644 \
     "$script_dir/systemd/miry-data-collector-alert@.service" \
     "$deploy_root/systemd/miry-data-collector-alert@.service"
 install -m 644 \
+    "$script_dir/systemd/miry-data-diagnostics.service" \
+    "$deploy_root/systemd/miry-data-diagnostics.service"
+install -m 644 \
+    "$script_dir/systemd/miry-data-diagnostics.timer" \
+    "$deploy_root/systemd/miry-data-diagnostics.timer"
+install -m 644 \
     "$script_dir/systemd/miry-data-collector.service" \
     /etc/systemd/system/miry-data-collector.service
 install -m 644 \
     "$script_dir/systemd/miry-data-collector-alert@.service" \
     /etc/systemd/system/miry-data-collector-alert@.service
+install -m 644 \
+    "$script_dir/systemd/miry-data-diagnostics.service" \
+    /etc/systemd/system/miry-data-diagnostics.service
+install -m 644 \
+    "$script_dir/systemd/miry-data-diagnostics.timer" \
+    /etc/systemd/system/miry-data-diagnostics.timer
 
 if [ ! -e "$config_root/edge.yaml" ]; then
     install \

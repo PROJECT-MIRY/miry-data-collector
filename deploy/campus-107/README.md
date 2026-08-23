@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.4.0
+## 2. 保留状态安装 v0.4.1
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
@@ -102,6 +102,10 @@ known_hosts: /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
 
 `runtime/deploy/campus-107/processing.env` 应使用绝对 Apptainer 路径、writable sandbox、上述
 raw/derived 和 `tokyo01`。赋值两侧不能有空格，含空格的值必须加引号。
+
+Binance canonical symbol 可以包含中文，例如 `币安人生USDT`。symbol 文件使用 UTF-8，提交脚本会
+在 sandbox 内验证恰好 60 个唯一、安全的 canonical symbol。中文名称原样进入 WebSocket/REST、raw
+和派生 identity；它不是显示别名，也不会被翻译成另一个 symbol。
 
 ## 5. 前台验证和第一次拉取
 
@@ -192,7 +196,9 @@ sacct -j <job-id> --format=JobID,State,Elapsed,MaxRSS,ExitCode
 
 必须从 formal start 所在的首个 partial UTC day 开始逐日提交。每个 L2 task 会生成日末
 `l2-checkpoint.json`，下一日用它继承连续盘口；如果本地已有前一天 `SEALED.json` 但尚无前一天
-`_PROCESSED.json`，`submit-day.sh` 会拒绝乱序提交，L2 本身也会拒绝续日缺少前一日 checkpoint。
+`_PROCESSED.json` 或 `_QUALITY_REJECTED.json`，`submit-day.sh` 会拒绝乱序提交。质量拒绝表示该日
+已完整生成 L2 输出与 checkpoint，但不能进入成功样本；后续日仍可继续。L2 本身会拒绝续日缺少
+或身份不一致的前一日 checkpoint。
 空 validity、损坏 checkpoint、区间重叠、越出目标 UTC 日、未分类时间、VALID/gap 冲突、任一币
 有效率低于 99.9%，或输入名单不等于 raw 权威 60 币都会使 finalize 失败，并写
 `_QUALITY_REJECTED.json`。成功后可检查：

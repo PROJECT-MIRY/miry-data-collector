@@ -1,4 +1,4 @@
-# 当前市场活跃度与采集容量（2026-08-23）
+# 市场活跃度与采集容量评估（2026-08-23）
 
 ## 结论
 
@@ -135,7 +135,7 @@ Vultr 在 `10:40:28.709Z` 至 `11:30:29.440Z` 的 50 分钟窗口中：
 | cgroup throttle | 117/123,202 periods；累计 57.7ms | 当前不是主要瓶颈 |
 
 队列、延迟、内存和 throttle 说明采集器并未处理不及；但 CPU 的 50 分钟均值已经略高于
-[`implementation-plan.md`](implementation-plan.md) 的 65% 目标，最近 10 分钟也高于 80% 目标。
+[`collection-contract.md`](collection-contract.md) 的 65% 目标，最近 10 分钟也高于 80% 目标。
 它仍在正常收包，不等于还有足够的 CPU 峰值余量。
 
 107 在 `10:42:08.171Z` 至 `11:17:28.737Z` 成功验证并 ACK `448,917,230` bytes，
@@ -160,7 +160,7 @@ Vultr 在 `10:40:28.709Z` 至 `11:30:29.440Z` 的 50 分钟窗口中：
    而最近 10 分钟 CPU 已达 `0.84` 核。不能把二者机械线性换算，但这足以说明 1 vCPU 峰值余量
    未经证明。8 月 19 日把短暂存储保护放大为 18 小时事故的 `sources already running` 恢复 bug
    已有单独的事故修复记录，见
-   [`v0.3.4-storage-recovery-incident-2026-08-20.md`](v0.3.4-storage-recovery-incident-2026-08-20.md)。
+   [`v0.3.4-storage-recovery-incident.md`](v0.3.4-storage-recovery-incident.md)。
 2. **107 传输：平均态可以，持续峰值余量不足。** 当前有效吞吐略低于最近 10 分钟生成峰值。
    网络或 107 变慢数小时不会立即丢数据，但 backlog 会增长。
 3. **长时间失联：不能保证。** 当前磁盘只为完全无 ACK 提供约 13--19 小时缓冲。类似冲击若叠加

@@ -1,4 +1,4 @@
-# 跨 UTC 日 L2 重建问题核查（2026-08-12）
+# 跨 UTC 日 L2 重建评估（2026-08-12）
 
 ## 结论
 
@@ -32,8 +32,8 @@ v0.3.0 raw 可从首个 formal partial UTC day 开始重新生成 derived，无�
 只有存在 decision 时才调用 `update_instruments()`。成员不变时不会触碰 source：
 [edge/service.py L207-L238](../src/miry/collector/service.py)。对应测试明确断言
 成员不变的日切没有 source update、没有 planned gap，只有 writer rotation 和前一日 seal：
-[test_edge_service.py L70-L81](../tests/test_edge_service.py#L70-L81)。项目计划也把这项行为写成正式
-合同：[implementation-plan.md L59-L68](implementation-plan.md#L59-L68)。
+[test_collector_service.py L192-L202](../tests/test_collector_service.py#L192-L202)。项目计划也把这项行为写成正式
+合同：[collection-contract.md L59-L68](collection-contract.md#L59-L68)。
 
 即使当天 universe 发生变化，public route 也只为 `added` symbol 生成 snapshot request：
 [edge/sources.py L108-L126](../src/miry/collector/routes.py)、

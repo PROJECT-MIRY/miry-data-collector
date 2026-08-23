@@ -1,4 +1,4 @@
-# 4/8 Public Shard A/B
+# Public WebSocket 4/8 分片 A/B 评估（2026-08-23）
 
 ## 目标
 

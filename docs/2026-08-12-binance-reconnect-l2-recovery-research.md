@@ -1,4 +1,4 @@
-# Binance USD-M Futures reconnect and L2 recovery research
+# Binance USD-M 重连与 L2 恢复调研（2026-08-12）
 
 Research date: 2026-08-12 (Asia/Shanghai). Scope is limited to Binance first-party documentation,
 the public USD-M Futures API, and Binance's official connector source. Repository observations are

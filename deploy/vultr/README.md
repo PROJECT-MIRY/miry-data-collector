@@ -217,7 +217,7 @@ sudo find /srv/miry-data-rsync/control/open-gaps -type f -maxdepth 1 -print
 ## 8. 24 小时性能验收
 
 每分钟 collector status 日志包含 RSS、Arrow bytes、CPU time、steal、event-loop lag、queue
-ratio、writer idle 和 finalize 时间。按照 [实施合同](../../docs/implementation-plan.md) 计算
+ratio、writer idle 和 finalize 时间。按照 [实施合同](../../docs/collection-contract.md) 计算
 p95/p99。若 OOM、RSS 峰值超过 700MiB、CPU p95 超过 80%、queue 连续过高、磁盘低于 2GiB
 或出现性能 gap，不得通过减少 60 币或降低频率规避；应先停止并扩容或优化。
 

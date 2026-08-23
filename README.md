@@ -33,13 +33,15 @@ src/miry/
 `pipeline -> contracts`。`universe` 不导入 `collector` 或 `pipeline`。完整权衡见
 [架构与选币职责](docs/architecture.md)。
 
+完整文档分类和适用性见 [文档索引](docs/README.md)。
+
 当前 `7.0` 正式名单证据见
-[结构化 universe clean start](docs/v0.3.5-structured-universe-clean-start.md)，规则、
-边界语义和性能标准见 [实施合同](docs/implementation-plan.md)。部署入口：
+[结构化 Universe 正式起点](docs/v0.3.5-structured-universe.md)，规则、
+边界语义和性能标准见 [采集与处理合同](docs/collection-contract.md)。部署入口：
 
 - [Vultr 正式采集部署](deploy/vultr/README.md)
 - [校园 107 拉取与处理部署](deploy/campus-107/README.md)
-- [端到端部署顺序](docs/deployment.md)
+- [端到端部署指南](docs/deployment.md)
 
 本地验证：
 
@@ -60,17 +62,17 @@ bridge 与 gap close 后才重新声明有效。正式 raw 合同和 generation 
 v0.3.2 把异常重连的 transport recovery 与 L2 snapshot readiness 分开：订阅 ACK 和每个受监控
 stream 的首事件证明 raw 恢复后即关闭 transport gap，但每个币仍须独立完成 snapshot bridge 才能
 重新进入 L2 `VALID`。正式 public 路由使用 4 个分片，降低单连接故障的币种范围和最慢重锚时间。
-官方约束和定量依据见 [重连恢复调研](docs/binance-reconnect-recovery-research-2026-08-12.md)。
+官方约束和定量依据见 [重连恢复调研](docs/2026-08-12-binance-reconnect-l2-recovery-research.md)。
 
 v0.3.3 将静默 stream 的恢复精确到 `(stream, symbol)`，控制 ACK 采用独立 10 秒 deadline；局部刷新
 失败时只重建所属 route，并为主动中断的 route 完整登记 gap，不再让 180 秒 refresh timeout 终止
 全部 60 币。历史 gap 内未收到的事件不能补回，边界与生产清点见
-[v0.3.3 完整性调研](docs/v0.3.3-gap-integrity-recovery-research-2026-08-17.md)。
+[v0.3.3 数据缺口与订阅恢复说明](docs/v0.3.3-gap-recovery.md)。
 
 v0.3.4 修复持久化 `STORAGE_EXHAUSTED_GAP` 跨进程恢复时重复启动 Binance sources 的 crash loop；
 存储硬限制仍会先登记 gap 再暂停采集，空间恢复后只启动一次 sources，并在完整 readiness 后关闭 gap。
 107 协议和数据合同没有变化。事故边界和升级要求见
-[v0.3.4 存储恢复事故记录](docs/v0.3.4-storage-recovery-incident-2026-08-20.md)。
+[v0.3.4 存储恢复事故复盘](docs/v0.3.4-storage-recovery-incident.md)。
 
 v0.3.5 将 universe 身份拆成 `core_generation.candidate_revision`：50 个 core 变化才增加
 `core_generation` 并把 revision 归零，仅 boundary/probe 变化只增加 revision，成员完全不变不产生
@@ -78,7 +80,7 @@ v0.3.5 将 universe 身份拆成 `core_generation.candidate_revision`：50 个 c
 本版本还修复 storage recovery 等待 source readiness 超时会终止 collector 的问题；超时后保持
 storage gap OPEN、清理半启动 sources，并在下一轮重试。旧 generation raw 保持原始字节，
 运行时代码不含兼容层；新旧实验由 formal-start 时间边界区分。部署边界见
-[v0.3.5 结构化 universe clean start](docs/v0.3.5-structured-universe-clean-start.md)。
+[v0.3.5 结构化 Universe 正式起点说明](docs/v0.3.5-structured-universe.md)。
 
 v0.3.6 避免 107 每分钟对已经发布且 manifest 完全一致的历史 sealed day 重复扫描全部 raw
 SHA-256。某日首次发布时仍逐 chunk 校验，远端 sealed manifest 冲突仍 fail closed；该补丁不改变
@@ -87,14 +89,14 @@ edge、raw、universe 或正式 60 币身份。
 v0.3.7 为 107 与 Vultr 增加持久 ACK transfer ledger 和原子状态快照；Vultr 使用可恢复 transaction
 保护 ready GC，损坏、未知或 hash 冲突 ACK 被隔离，不再终止 collector 或触发重复全量扫描。
 central 同时拒绝不安全 `collector_id`，磁盘最小可用空间保护线调整为 2 GiB。详见
-[ACK 传输审计合同](docs/transfer-ack-observability.md)。
+[ACK 传输审计合同](docs/transfer-ack-contract.md)。
 
 v0.3.8 针对 1C1G 正式采集器的重连风暴做生产优化：public route 改为按实测消息速率稳定加权
 分片，WebSocket queue 增至 16；审计连续 3 次、定向刷新连续 2 次失败才重连，旧连接遗留任务
 不能中断新连接；异常重试使用 30 秒封顶的指数退避。L2 snapshot 安全间隔由 2 秒降为 1 秒，
 在当前 2,400 weight/min 观测限额下保留约一半预算。正式 `7.0` 名单、raw schema、rsync 和 107
 处理合同不变。诊断、容量依据与验收见
-[v0.3.8 collector 可靠性记录](docs/v0.3.8-collector-reliability-2026-08-23.md)。
+[v0.3.8 采集器可靠性优化说明](docs/v0.3.8-collector-reliability.md)。
 
 v0.3.9 删除成交额、交易数、CV、点差和 depth 的绝对选币门槛，改为五指标横截面最弱项优先
 排名。独立 market context 使用 28 日基线与最近 1/3/7 日识别广泛活动冲击：pending 时冻结
@@ -108,14 +110,14 @@ snapshot，同时最多允许 4 个慢 HTTP 在途，恢复队列存在时暂停
 symbol 串行阻塞。实时 source readiness 与约 6 分钟的 universe discovery readiness 分离，OI
 首轮在 5 秒内错峰完成，正式重启不再等待整轮选币证据。正式名单、raw、rsync/ACK 和 107 合同
 不变。设计与验收见
-[v0.3.10 snapshot 调度记录](docs/v0.3.10-snapshot-scheduler-2026-08-23.md)。
+[v0.3.10 L2 快照调度优化说明](docs/v0.3.10-snapshot-scheduling.md)。
 
 当前代码把静态路由基准升级为简单的长期流量观测：`message_rates` 表示每币每分钟 public
 WebSocket 消息数，采集器按完整分钟计数、每 60 分钟保存一个峰值块，并只保留最近 24 块。状态少于
 24 个完整块时继续使用配置基准；证据充足后使用最近 24 小时的观测峰值。动态路由调整必须采用
 add-ready-remove 两阶段交接，不能为了均衡重启采集器或先删除旧订阅。该状态不改变 50/5/5
 身份、raw 或 107 合同，详见
-[public 流量均衡](docs/traffic-balancing.md)。
+[Public WebSocket 流量均衡](docs/traffic-balancing.md)。
 
 当前选币的点差指标使用 21 次、1 秒间隔全市场 bookTicker 的 q95，替代少量 depth/bookTicker
 样本的最大值；3 次 depth snapshot 仅用于 10/50 bps 深度。该变化降低单个异常报价对横截面排名
@@ -125,7 +127,7 @@ v0.4.0 删除旧 Python 包和 `central`/`edge` 源码拓扑，改用职责明�
 `miry.collector`、`miry.pipeline`、`miry.universe`、`miry.contracts` 和 `miry.cli`。这是 Python
 import/API 的破坏性变更，但不改变 raw schema、rsync/ACK、gap、universe identity 或磁盘数据布局；
 两端必须升级 runtime，但禁止 clean start 或删除历史数据。详见
-[v0.4.0 架构重构发布说明](docs/v0.4.0-architecture-refactor-2026-08-23.md)。
+[v0.4.0 架构重构发布说明](docs/v0.4.0-architecture-refactor.md)。
 
 v0.4.0 完成运行接口改名：命令统一为 `miry-data-*`，环境变量统一为 `MIRY_*`，Vultr 使用
 `miry-data-collector.service`、`/opt/miry-data-collector`、`/etc/miry-data-collector` 和
@@ -136,14 +138,14 @@ v0.4.1 为 4/8 public shard 生产 A/B 增加有界分片、宿主机 TCP/cgroup
 peer/订阅/snapshot 延迟日志。正式配置仍以 4 shards 开始，满 24 小时证据后才允许受控切到 8；
 8-shard 最大 route 限制为 9 币。107 的质量拒绝日现在是可继续 checkpoint 链的终态，不再永久
 阻断后续日期；质量成功门槛和 raw 合同不变。实验门禁见
-[4/8 shard A/B](docs/shard-ab-2026-08-23.md)。
+[Public WebSocket 4/8 分片 A/B 评估](docs/2026-08-23-public-shard-ab-assessment.md)。
 v0.4.1 支持 Binance 真实的 Unicode canonical symbol，例如 `币安人生USDT`；安全验证仍拒绝空白、
 路径分隔符、控制字符和非 canonical 大小写。
 
 v0.4.2 删除 WebSocket 热路径中每条消息一次的 receive task、timeout 和 wait-set 分配，改为每条
 连接固定的 receiver、watchdog、subscription update 和 audit task。100k 真实消息单核回放由
 `1.959s` 降至 `0.449s`；raw、gap、snapshot、universe、rsync/ACK 和 107 合同均不变。诊断与
-验收记录见 [4/8 shard A/B](docs/shard-ab-2026-08-23.md)。
+验收记录见 [Public WebSocket 4/8 分片 A/B 评估](docs/2026-08-23-public-shard-ab-assessment.md)。
 
 v0.5.0 删除旧部署位置式 CLI 名称：`miry-data-edge`、`miry-data-control` 和
 `miry-data-release` 分别改为 `miry-data-collect`、`miry-data-override` 和 `miry-data-pin`，不保留

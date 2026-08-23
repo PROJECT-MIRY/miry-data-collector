@@ -144,7 +144,7 @@ tail -n 20 "/home/scc/pb24000367/Projects/bn/data/transfer-ledger/date=$LEDGER_D
 
 `state=ok` 且 `acks_pushed=acks_queued` 证明 107 已完成本地持久化和 ACK 回传；端到端确认还要
 在 Vultr 看到对应 `REMOTE_GC`。完整语义见
-[ACK 传输审计合同](../../docs/transfer-ack-observability.md)。
+[ACK 传输审计合同](../../docs/transfer-ack-contract.md)。
 
 ## 6. 安装 cron
 

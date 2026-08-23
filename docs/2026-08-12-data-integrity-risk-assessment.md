@@ -1,10 +1,10 @@
-# 数据完整性风险评估与 v0.3.1 修复记录（2026-08-12）
+# 数据完整性风险与 v0.3.1 修复评估（2026-08-12）
 
 ## 结论摘要
 
 本报告检查 `v0.3.0` 与本地待发布的 `v0.3.1` 代码，范围是单 stream 静默、日覆盖率、
 writer durability/事件循环阻塞和事件去重。跨日 L2 checkpoint 另见
-[跨日 L2 重建评估](cross-day-l2-reconstruction-assessment-2026-08-12.md)。
+[跨日 L2 重建评估](2026-08-12-cross-day-l2-reconstruction-assessment.md)。
 
 | 风险 | v0.3.0 结论 | v0.3.1 处理 |
 | --- | --- | --- |
@@ -14,7 +14,7 @@ writer durability/事件循环阻塞和事件去重。跨日 L2 checkpoint 另�
 | 部分事件未去重 | **真实存在，P1/P2** | 补齐 market overlap 精确 replay identity，depth/book ID 冲突 fail closed；去重状态限定 10 分钟并跨 UTC 日 checkpoint；D0 排除 `is_duplicate=true`。 |
 
 这些结论均已用最小失败用例复现，再由 v0.3.1 回归测试锁定。跨日 L2 checkpoint 修复另见
-[跨日 L2 重建评估](cross-day-l2-reconstruction-assessment-2026-08-12.md)。`forceOrder` 每秒最多提供
+[跨日 L2 重建评估](2026-08-12-cross-day-l2-reconstruction-assessment.md)。`forceOrder` 每秒最多提供
 最新一笔的源端语义无法由本项目修复，因此数据集不得把它解释为完整逐笔强平日志。
 
 ## v0.3.1 最终参数和验证

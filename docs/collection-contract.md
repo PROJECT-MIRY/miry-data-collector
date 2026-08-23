@@ -1,4 +1,4 @@
-# v0.5.0 正式采集实施合同
+# v0.5.0 正式采集与处理合同
 
 ## 本阶段目标
 
@@ -132,7 +132,7 @@ ticker 响应的 SHA-256。该事件时间之后的数据属于正式实验。24
 
 两端必须持久记录 `LOCAL_DURABLE`、`ACK_PUSHED`、`ACK_VALIDATED` 和 `REMOTE_GC`；Vultr 删除
 ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 只能隔离和报警，不能删除 ready
-或终止全部采集。详细合同见 [ACK 传输审计](transfer-ack-observability.md)。
+或终止全部采集。详细合同见 [ACK 传输审计](transfer-ack-contract.md)。
 
 禁止使用 `--remove-source-files`。暂存镜像不是永久数据，下一次同步可删除已从 Vultr GC 的
 镜像文件；`data/raw` 才是 107 上的永久原始数据。
@@ -170,7 +170,7 @@ Binance 公开 USD-M 行情接口没有提供这种 market-by-order feed。可�
 
 当前实验研究价差、价位深度、冲击成本、成交与 L2 order-flow imbalance，不需要 L3。
 只有研究 queue position、逐订单寿命、撤单行为或订单级成交概率时，才另立第三方数据源与
-基础设施项目；容量和来源评估见 [L3 数据评估](l3-data-assessment-2026-08-12.md)。
+基础设施项目；容量和来源评估见 [L3 数据评估](2026-08-12-l3-data-assessment.md)。
 
 ## 跨日 L2 派生合同
 

@@ -1,4 +1,4 @@
-# Public 流量均衡
+# Public WebSocket 流量均衡
 
 ## 目的
 

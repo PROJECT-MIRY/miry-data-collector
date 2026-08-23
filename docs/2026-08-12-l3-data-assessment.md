@@ -101,7 +101,7 @@ Binance 没有公开 L3 产品，所以也没有可引用的官方 L3 字节率�
 不应。原因是：
 
 1. 当前正式实验合同要求 L2 重建与 gap 可证明性，现有 snapshot + sequence-aware diff 已直接
-   覆盖该目标；参见[正式采集实施合同](implementation-plan.md)。
+   覆盖该目标；参见[正式采集实施合同](collection-contract.md)。
 2. 研究价差、聚合深度、固定名义冲击成本、成交方向和 L2 order-flow imbalance 不要求知道
    同价位内每张订单的身份。
 3. 官方公共源没有 L3；引入第三方会改变数据来源、时钟语义、许可、完整性校验和可复现性。

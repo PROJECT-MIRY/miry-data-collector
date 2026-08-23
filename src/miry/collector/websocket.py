@@ -6,14 +6,18 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
-from uuid import uuid4
 
 import aiohttp
 import orjson
-from websockets.asyncio.client import connect
+from websockets.asyncio.client import ClientConnection, connect
 
 from miry.collector.ingest import IngestCoordinator
 from miry.collector.rest import BinanceRestClient
+from miry.collector.ws_control import (
+    ControlRequest,
+    SubscriptionController,
+    SubscriptionUpdate,
+)
 from miry.contracts.models import RawEvent, StreamType
 
 logger = logging.getLogger(__name__)
@@ -25,102 +29,6 @@ class DecodedWebSocket:
     symbol: str | None
     message: dict[str, Any] | None
     data: dict[str, Any] | None
-
-
-@dataclass(slots=True)
-class SubscriptionUpdate:
-    add: tuple[str, ...]
-    remove: tuple[str, ...]
-    snapshot_requests: tuple[tuple[str, StreamType], ...]
-    acknowledged: asyncio.Future[None]
-    completion: asyncio.Future[None]
-
-
-class SubscriptionAuditError(OSError):
-    def __init__(self, message: str, *, affected_from_realtime_ns: int) -> None:
-        super().__init__(message)
-        self.affected_from_realtime_ns = affected_from_realtime_ns
-
-
-@dataclass(frozen=True, slots=True)
-class _ControlResponse:
-    request_id: int
-    message: dict[str, Any]
-    observed_at_realtime_ns: int
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingControlRequest:
-    request_id: int
-    future: asyncio.Future[_ControlResponse]
-
-
-class _ControlRequests:
-    def __init__(self, initial_id: int) -> None:
-        self._next_id = initial_id - 1
-        self._pending: dict[int, asyncio.Future[_ControlResponse]] = {}
-
-    async def request(
-        self,
-        websocket: Any,
-        method: str,
-        *,
-        params: tuple[str, ...] | None = None,
-        timeout_seconds: float | None = None,
-    ) -> _ControlResponse:
-        pending = await self.send(websocket, method, params=params)
-        return await self.wait(pending, timeout_seconds=timeout_seconds)
-
-    async def send(
-        self,
-        websocket: Any,
-        method: str,
-        *,
-        params: tuple[str, ...] | None = None,
-    ) -> _PendingControlRequest:
-        self._next_id += 1
-        request_id = self._next_id
-        future = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = future
-        payload: dict[str, object] = {"method": method, "id": request_id}
-        if params is not None:
-            payload["params"] = list(params)
-        try:
-            await websocket.send(orjson.dumps(payload).decode())
-        except BaseException:
-            self._pending.pop(request_id, None)
-            future.cancel()
-            raise
-        return _PendingControlRequest(request_id, future)
-
-    async def wait(
-        self,
-        pending: _PendingControlRequest,
-        *,
-        timeout_seconds: float | None = None,
-    ) -> _ControlResponse:
-        try:
-            if timeout_seconds is None:
-                return await pending.future
-            async with asyncio.timeout(timeout_seconds):
-                return await pending.future
-        finally:
-            self._pending.pop(pending.request_id, None)
-
-    def deliver(self, message: dict[str, Any], observed_at_realtime_ns: int) -> None:
-        request_id = message.get("id")
-        if not isinstance(request_id, int):
-            return
-        future = self._pending.get(request_id)
-        if future is None or future.done():
-            return
-        future.set_result(_ControlResponse(request_id, message, observed_at_realtime_ns))
-
-    def cancel(self) -> None:
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
-        self._pending.clear()
 
 
 def decode_websocket(raw: bytes) -> DecodedWebSocket:
@@ -251,15 +159,11 @@ class BinanceWebSocketConnection:
         self._resync_tasks: dict[tuple[StreamType, str], asyncio.Task[None]] = {}
         self._snapshot_pending = set(snapshot_requests)
         self._last_receive_monotonic = time.monotonic()
-        self._subscription_proven_realtime_ns: int | None = None
         self._background_failure: asyncio.Future[None] | None = None
 
     async def run(self) -> None:
-        initial_subscription_id = int.from_bytes(uuid4().bytes[:4], "big")
-        active_subscriptions = set(self._subscriptions)
-        control_lock = asyncio.Lock()
-        control = _ControlRequests(initial_subscription_id)
         tasks: list[asyncio.Task[Any]] = []
+        control: SubscriptionController | None = None
         self._background_failure = asyncio.get_running_loop().create_future()
         try:
             async with connect(
@@ -277,11 +181,22 @@ class BinanceWebSocketConnection:
                     peer,
                     len(self._subscriptions),
                 )
+                control = SubscriptionController(
+                    websocket=websocket,
+                    subscriptions=self._subscriptions,
+                    updates=self._updates,
+                    connection_id=self._identity.connection_id,
+                    peer=peer,
+                    audit_seconds=self._subscription_audit_seconds,
+                    audit_timeout_seconds=self._subscription_audit_timeout_seconds,
+                    audit_failures_before_reconnect=(
+                        self._subscription_audit_failures_before_reconnect
+                    ),
+                    recover_snapshots=self._fetch_requested_snapshots,
+                )
                 self._last_receive_monotonic = time.monotonic()
                 initial_subscription_started = time.monotonic()
-                initial_request = await control.send(
-                    websocket, "SUBSCRIBE", params=self._subscriptions
-                )
+                initial_request = await control.send_initial()
                 receiver = asyncio.create_task(
                     self._receive_loop(websocket, control),
                     name=f"receiver-{self._identity.connection_id}",
@@ -294,38 +209,40 @@ class BinanceWebSocketConnection:
                     self._stop.wait(), name=f"connection-stop-{self._identity.connection_id}"
                 )
                 bootstrap = asyncio.create_task(
-                    self._bootstrap(
-                        control, initial_request, peer, initial_subscription_started
-                    ),
+                    self._bootstrap(control, initial_request, initial_subscription_started),
                     name=f"bootstrap-{self._identity.connection_id}",
                 )
                 tasks.extend((receiver, watchdog, stop_task, bootstrap))
-                if not await self._wait_for_bootstrap(
-                    bootstrap, receiver, watchdog, stop_task, self._background_failure
+                if not await _wait_for_phase(
+                    success=bootstrap,
+                    stop_task=stop_task,
+                    failures=(receiver, watchdog, self._background_failure),
                 ):
                     return
                 tasks.remove(bootstrap)
                 updates = asyncio.create_task(
-                    self._update_loop(websocket, control, control_lock, active_subscriptions),
+                    control.run_updates(),
                     name=f"subscription-updates-{self._identity.connection_id}",
                 )
                 audit = asyncio.create_task(
-                    self._audit_loop(
-                        websocket, control, control_lock, active_subscriptions, peer
-                    ),
+                    control.run_audits(),
                     name=f"subscription-audit-{self._identity.connection_id}",
                 )
                 tasks.extend((updates, audit))
-                await self._wait_until_stopped(
-                    receiver,
-                    watchdog,
-                    updates,
-                    audit,
-                    stop_task,
-                    self._background_failure,
+                await _wait_for_phase(
+                    success=None,
+                    stop_task=stop_task,
+                    failures=(
+                        receiver,
+                        watchdog,
+                        updates,
+                        audit,
+                        self._background_failure,
+                    ),
                 )
         finally:
-            control.cancel()
+            if control is not None:
+                control.close()
             for task in tasks:
                 task.cancel()
             resync_tasks = list(self._resync_tasks.values())
@@ -339,7 +256,9 @@ class BinanceWebSocketConnection:
             self._resync_tasks.clear()
             self._background_failure = None
 
-    async def _receive_loop(self, websocket: Any, control: _ControlRequests) -> None:
+    async def _receive_loop(
+        self, websocket: ClientConnection, control: SubscriptionController
+    ) -> None:
         while not self._stop.is_set():
             raw = await websocket.recv(decode=False)
             realtime_ns = time.time_ns()
@@ -360,8 +279,6 @@ class BinanceWebSocketConnection:
             self._transport_pending.discard((decoded.stream_type, decoded.symbol or ""))
             self._maybe_mark_transport_ready()
             if decoded.stream_type is StreamType.WS_CONTROL and decoded.message:
-                if decoded.message.get("code") is not None:
-                    raise OSError(f"Binance subscription rejected: {decoded.message}")
                 control.deliver(decoded.message, realtime_ns)
             if (
                 decoded.stream_type in {StreamType.DEPTH, StreamType.RPI_DEPTH}
@@ -374,23 +291,13 @@ class BinanceWebSocketConnection:
 
     async def _bootstrap(
         self,
-        control: _ControlRequests,
-        initial_request: _PendingControlRequest,
-        peer: str,
+        control: SubscriptionController,
+        initial_request: ControlRequest,
         started: float,
     ) -> None:
-        response = await control.wait(initial_request)
-        if not _is_subscription_ack(response.message, response.request_id):
-            raise OSError(f"Binance subscription rejected: {response.message}")
+        await control.complete_initial(initial_request, started=started)
         self._initial_subscription_acknowledged = True
-        self._subscription_proven_realtime_ns = response.observed_at_realtime_ns
         self._maybe_mark_transport_ready()
-        logger.info(
-            "subscription ready connection_id=%s peer=%s rtt_ms=%.3f",
-            self._identity.connection_id,
-            peer,
-            (time.monotonic() - started) * 1_000,
-        )
         if self._snapshot_requests:
             await self._fetch_snapshots()
         self._ready.set()
@@ -406,148 +313,6 @@ class BinanceWebSocketConnection:
                     f"connection_id={self._identity.connection_id}"
                 )
 
-    async def _update_loop(
-        self,
-        websocket: Any,
-        control: _ControlRequests,
-        control_lock: asyncio.Lock,
-        active_subscriptions: set[str],
-    ) -> None:
-        while True:
-            update = await self._updates.get()
-            if update.acknowledged.cancelled() or update.completion.cancelled():
-                continue
-            self._snapshot_pending.update(update.snapshot_requests)
-            try:
-                requests = []
-                async with control_lock:
-                    for method, streams in (
-                        ("UNSUBSCRIBE", update.remove),
-                        ("SUBSCRIBE", update.add),
-                    ):
-                        if streams:
-                            requests.append(control.request(websocket, method, params=streams))
-                    if requests:
-                        await asyncio.gather(*requests)
-                    active_subscriptions.difference_update(update.remove)
-                    active_subscriptions.update(update.add)
-                if not update.acknowledged.done():
-                    update.acknowledged.set_result(None)
-                if update.snapshot_requests:
-                    await self._fetch_requested_snapshots(
-                        update.snapshot_requests, update.completion
-                    )
-                elif not update.completion.done():
-                    update.completion.set_result(None)
-            except BaseException as exc:
-                _fail_subscription_update(update, exc)
-                raise
-
-    async def _audit_loop(
-        self,
-        websocket: Any,
-        control: _ControlRequests,
-        control_lock: asyncio.Lock,
-        active_subscriptions: set[str],
-        peer: str,
-    ) -> None:
-        failures = 0
-        await asyncio.sleep(self._subscription_audit_seconds)
-        while True:
-            started = time.monotonic()
-            try:
-                async with control_lock:
-                    response = await control.request(
-                        websocket,
-                        "LIST_SUBSCRIPTIONS",
-                        timeout_seconds=self._subscription_audit_timeout_seconds,
-                    )
-            except TimeoutError as exc:
-                failures += 1
-                if failures >= self._subscription_audit_failures_before_reconnect:
-                    raise SubscriptionAuditError(
-                        "subscription audit response was not received within "
-                        f"{self._subscription_audit_timeout_seconds:g}s "
-                        f"for {failures} consecutive attempts",
-                        affected_from_realtime_ns=(
-                            self._subscription_proven_realtime_ns or time.time_ns()
-                        ),
-                    ) from exc
-                logger.warning(
-                    "subscription audit response missed connection_id=%s "
-                    "failures=%d threshold=%d; retrying",
-                    self._identity.connection_id,
-                    failures,
-                    self._subscription_audit_failures_before_reconnect,
-                )
-                continue
-            result = response.message.get("result")
-            actual = (
-                set(result)
-                if isinstance(result, list) and all(isinstance(value, str) for value in result)
-                else set()
-            )
-            if actual != active_subscriptions:
-                missing = sorted(active_subscriptions - actual)
-                unexpected = sorted(actual - active_subscriptions)
-                raise SubscriptionAuditError(
-                    "subscription audit mismatch "
-                    f"missing={missing} unexpected={unexpected}",
-                    affected_from_realtime_ns=(
-                        self._subscription_proven_realtime_ns
-                        or response.observed_at_realtime_ns
-                    ),
-                )
-            failures = 0
-            self._subscription_proven_realtime_ns = response.observed_at_realtime_ns
-            logger.info(
-                "subscription audit connection_id=%s peer=%s rtt_ms=%.3f "
-                "ping_rtt_ms=%s subscriptions=%d",
-                self._identity.connection_id,
-                peer,
-                (time.monotonic() - started) * 1_000,
-                _latency_ms(getattr(websocket, "latency", None)),
-                len(actual),
-            )
-            await asyncio.sleep(self._subscription_audit_seconds)
-
-    async def _wait_for_bootstrap(
-        self,
-        bootstrap: asyncio.Task[None],
-        receiver: asyncio.Task[None],
-        watchdog: asyncio.Task[None],
-        stop_task: asyncio.Task[bool],
-        background_failure: asyncio.Future[None],
-    ) -> bool:
-        done, _ = await asyncio.wait(
-            (bootstrap, receiver, watchdog, stop_task, background_failure),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if stop_task in done:
-            return False
-        if bootstrap in done:
-            await bootstrap
-            return True
-        await _raise_connection_completion(done)
-        raise AssertionError("unreachable")
-
-    async def _wait_until_stopped(
-        self,
-        receiver: asyncio.Task[None],
-        watchdog: asyncio.Task[None],
-        updates: asyncio.Task[None],
-        audit: asyncio.Task[None],
-        stop_task: asyncio.Task[bool],
-        background_failure: asyncio.Future[None],
-    ) -> None:
-        done, _ = await asyncio.wait(
-            (receiver, watchdog, updates, audit, stop_task, background_failure),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if stop_task in done:
-            return
-        await _raise_connection_completion(done)
-
     def _maybe_mark_transport_ready(self) -> None:
         if self._initial_subscription_acknowledged and not self._transport_pending:
             self._transport_ready.set()
@@ -557,6 +322,7 @@ class BinanceWebSocketConnection:
         requests: tuple[tuple[str, StreamType], ...],
         completion: asyncio.Future[None],
     ) -> None:
+        self._snapshot_pending.update(requests)
         try:
             for symbol, stream_type in requests:
                 await self._fetch_snapshot(symbol, stream_type)
@@ -664,21 +430,19 @@ class BinanceWebSocketConnection:
             self._background_failure.set_exception(error)
 
 
-def _fail_subscription_update(update: SubscriptionUpdate, error: BaseException) -> None:
-    if update.acknowledged.cancelled():
-        if not update.completion.done():
-            update.completion.cancel()
-        return
-    if not update.acknowledged.done():
-        update.acknowledged.set_exception(error)
-        if not update.completion.done():
-            update.completion.cancel()
-        return
-    if not update.completion.done():
-        update.completion.set_exception(error)
-
-
-async def _raise_connection_completion(done: set[asyncio.Future[Any]]) -> None:
+async def _wait_for_phase(
+    *,
+    success: asyncio.Task[None] | None,
+    stop_task: asyncio.Task[bool],
+    failures: tuple[asyncio.Future[Any], ...],
+) -> bool:
+    waiters = (*failures, stop_task) if success is None else (*failures, stop_task, success)
+    done, _ = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    if stop_task in done:
+        return False
+    if success is not None and success in done:
+        await success
+        return True
     for completed in done:
         if completed.cancelled():
             await completed
@@ -692,12 +456,6 @@ def _peer_text(value: object) -> str:
     if isinstance(value, tuple) and len(value) >= 2:
         return f"{value[0]}:{value[1]}"
     return str(value) if value is not None else "unknown"
-
-
-def _latency_ms(value: object) -> str:
-    if isinstance(value, int | float):
-        return f"{value * 1_000:.3f}"
-    return "unknown"
 
 
 def public_subscriptions(instruments: tuple[str, ...], *, d0_enabled: bool) -> tuple[str, ...]:
@@ -724,9 +482,3 @@ def market_subscriptions(instruments: tuple[str, ...]) -> tuple[str, ...]:
     ]
     streams.append("!contractInfo")
     return tuple(streams)
-
-
-def _is_subscription_ack(value: dict[str, Any] | None, expected_id: int) -> bool:
-    return (
-        isinstance(value, dict) and value.get("id") == expected_id and value.get("result") is None
-    )

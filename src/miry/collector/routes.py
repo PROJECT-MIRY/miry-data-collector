@@ -18,9 +18,8 @@ from miry.collector.rest import BinanceRestClient
 from miry.collector.websocket import (
     BinanceWebSocketConnection,
     SourceIdentity,
-    SubscriptionAuditError,
-    SubscriptionUpdate,
 )
+from miry.collector.ws_control import SubscriptionAuditError, SubscriptionUpdate
 from miry.contracts.models import GapReason, StreamType
 
 logger = logging.getLogger(__name__)

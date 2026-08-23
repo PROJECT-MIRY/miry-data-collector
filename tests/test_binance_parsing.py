@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import orjson
@@ -10,12 +12,16 @@ from miry.collector.rest import BinanceRestClient
 from miry.collector.websocket import (
     BinanceWebSocketConnection,
     SourceIdentity,
-    SubscriptionAuditError,
-    SubscriptionUpdate,
     decode_websocket,
 )
+from miry.collector.ws_control import SubscriptionAuditError, SubscriptionUpdate
 from miry.contracts.models import RawEvent, StreamType
 from miry.pipeline.parsing import logical_identity, parse_typed_row
+
+
+@asynccontextmanager
+async def fake_connection(websocket: object) -> AsyncIterator[object]:
+    yield websocket
 
 
 class StalledWebSocket:
@@ -24,12 +30,6 @@ class StalledWebSocket:
         self.receive_calls = 0
         self.stalled = asyncio.Event()
         self.sent_methods: list[str] = []
-
-    async def __aenter__(self) -> StalledWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
 
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
@@ -50,12 +50,6 @@ class MissingSubscriptionWebSocket:
     def __init__(self) -> None:
         self.responses: asyncio.Queue[bytes] = asyncio.Queue()
 
-    async def __aenter__(self) -> MissingSubscriptionWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
         request_id = int(message["id"])
@@ -71,12 +65,6 @@ class MissingAuditResponseWebSocket:
     def __init__(self) -> None:
         self.responses: asyncio.Queue[bytes] = asyncio.Queue()
         self.audit_requests = 0
-
-    async def __aenter__(self) -> MissingAuditResponseWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
 
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
@@ -136,12 +124,6 @@ class RecoveryWebSocket:
         self.waiting_for_depth = asyncio.Event()
         self.release_depth = asyncio.Event()
         self.depth_sent = False
-
-    async def __aenter__(self) -> RecoveryWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
 
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
@@ -222,12 +204,6 @@ class BurstWebSocket:
             }
         )
 
-    async def __aenter__(self) -> BurstWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
         if message["method"] == "SUBSCRIBE":
@@ -251,12 +227,6 @@ class UpdatingWebSocket:
     def __init__(self) -> None:
         self.responses: asyncio.Queue[bytes] = asyncio.Queue()
         self.sent_methods: list[str] = []
-
-    async def __aenter__(self) -> UpdatingWebSocket:
-        return self
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
 
     async def send(self, value: str) -> None:
         message = orjson.loads(value)
@@ -683,7 +653,7 @@ async def test_burst_receive_uses_constant_background_tasks(
     ingest = RecordingIngest()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
     real_create_task = asyncio.create_task
     tasks_created = 0
@@ -737,7 +707,7 @@ async def test_subscription_update_acknowledges_without_stopping_receiver(
     updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
 
     async def ignore_depth_gap(*args: object) -> str:
@@ -795,7 +765,7 @@ async def test_websocket_silence_fails_the_connection(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
 
     async def open_depth_gap(*args: object) -> str:
@@ -842,7 +812,7 @@ async def test_reconnected_websocket_ignores_expired_subscription_update(
     websocket = StalledWebSocket()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
     loop = asyncio.get_running_loop()
     acknowledged = loop.create_future()
@@ -905,7 +875,7 @@ async def test_transport_recovers_before_l2_snapshots_finish(
     stop = asyncio.Event()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
 
     async def open_depth_gap(*args: object) -> str:
@@ -961,7 +931,7 @@ async def test_subscription_audit_fails_when_one_stream_disappears(
     websocket = MissingSubscriptionWebSocket()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
 
     async def open_depth_gap(*args: object) -> str:
@@ -1003,7 +973,7 @@ async def test_subscription_audit_response_cannot_silently_disappear(
     websocket = MissingAuditResponseWebSocket()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
 
     async def open_depth_gap(*args: object) -> str:
@@ -1047,7 +1017,7 @@ async def test_subscription_audit_recovers_after_one_missing_response(
     websocket = RecoveringAuditWebSocket()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
-        lambda *args, **kwargs: websocket,
+        lambda *args, **kwargs: fake_connection(websocket),
     )
     stop = asyncio.Event()
 

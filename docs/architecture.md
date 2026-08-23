@@ -23,6 +23,8 @@ src/miry/
 spool/ACK GC，以及在线应用已经形成的 universe 决策。内部进一步分为：
 
 - `routes.py`：WebSocket route 生命周期、重连、存活检测和 add-ready-remove 更新；
+- `websocket.py`：高频数据帧接收、边缘时间戳、raw admission 和 depth sequence 恢复；
+- `ws_control.py`：低频订阅 ACK、LIST audit 和动态订阅控制；
 - `polling.py`：OI、时钟、交易所目录和 universe evidence 的 REST 轮询；
 - `sources.py`：装配 routes 与 pollers，不实现协议细节；
 - `membership.py`：持久化 active/pending universe，并在受控边界应用决策。

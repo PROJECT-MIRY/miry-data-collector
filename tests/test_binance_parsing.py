@@ -6,16 +6,16 @@ from types import SimpleNamespace
 import orjson
 import pytest
 
-from ft_shadow_data_plane.central.binance import logical_identity, parse_typed_row
-from ft_shadow_data_plane.contracts.models import RawEventV1, StreamType
-from ft_shadow_data_plane.edge.binance import (
+from miry.collector.rest import BinanceRestClient
+from miry.collector.websocket import (
     BinanceWebSocketConnection,
     SourceIdentity,
     SubscriptionAuditError,
     SubscriptionUpdate,
     decode_websocket,
 )
-from ft_shadow_data_plane.edge.rest import BinanceRestClient
+from miry.contracts.models import RawEvent, StreamType
+from miry.pipeline.parsing import logical_identity, parse_typed_row
 
 
 class StalledWebSocket:
@@ -200,9 +200,9 @@ class BlockingSnapshotRest:
 
 class RecordingIngest:
     def __init__(self) -> None:
-        self.events: list[RawEventV1] = []
+        self.events: list[RawEvent] = []
 
-    async def put(self, event: RawEventV1) -> None:
+    async def put(self, event: RawEvent) -> None:
         self.events.append(event)
 
 
@@ -618,7 +618,7 @@ async def test_websocket_silence_fails_the_connection(monkeypatch: pytest.Monkey
     ingest = RecordingIngest()
 
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
 
@@ -665,7 +665,7 @@ async def test_reconnected_websocket_ignores_expired_subscription_update(
 ) -> None:
     websocket = StalledWebSocket()
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
     loop = asyncio.get_running_loop()
@@ -728,7 +728,7 @@ async def test_transport_recovers_before_l2_snapshots_finish(
     transport_ready = asyncio.Event()
     stop = asyncio.Event()
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
 
@@ -784,7 +784,7 @@ async def test_subscription_audit_fails_when_one_stream_disappears(
 ) -> None:
     websocket = MissingSubscriptionWebSocket()
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
 
@@ -826,7 +826,7 @@ async def test_subscription_audit_response_cannot_silently_disappear(
 ) -> None:
     websocket = MissingAuditResponseWebSocket()
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
 
@@ -870,7 +870,7 @@ async def test_subscription_audit_recovers_after_one_missing_response(
 ) -> None:
     websocket = RecoveringAuditWebSocket()
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.binance.connect",
+        "miry.collector.websocket.connect",
         lambda *args, **kwargs: websocket,
     )
     stop = asyncio.Event()

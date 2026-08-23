@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import orjson
 
-from ft_shadow_data_plane.central.selector import DiscoverySnapshot
+from miry.universe.models import DiscoverySnapshot
 
 DAY_MS = 86_400_000
 

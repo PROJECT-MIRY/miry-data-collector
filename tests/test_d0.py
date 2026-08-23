@@ -7,10 +7,10 @@ import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ft_shadow_data_plane.central.binance import parse_typed_row
-from ft_shadow_data_plane.central.d0 import build_d0_audit
-from ft_shadow_data_plane.contracts.models import StreamType
-from ft_shadow_data_plane.contracts.typed_schema import TYPED_EVENT_SCHEMA_V1
+from miry.contracts.models import StreamType
+from miry.contracts.typed import TYPED_EVENT_SCHEMA
+from miry.pipeline.d0 import build_d0_audit
+from miry.pipeline.parsing import parse_typed_row
 
 
 def test_d0_audit_excludes_marked_overlap_duplicates(tmp_path: Path) -> None:
@@ -48,7 +48,7 @@ def test_d0_audit_excludes_marked_overlap_duplicates(tmp_path: Path) -> None:
     typed_root = tmp_path / "typed/collector=tokyo01/date=2026-08-10"
     typed_root.mkdir(parents=True)
     pq.write_table(
-        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA_V1),
+        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA),
         typed_root / "market.typed.parquet",
     )
 

@@ -1,12 +1,11 @@
-# v0.3.10 端到端部署顺序
+# v0.4.0 端到端部署顺序
 
 正式链路必须按以下顺序上线，避免 collector 产生数据后没有可用的异地持久化端。
 
 1. 在 107 准备 `~/.ssh/ft-data-puller`，将公钥安全传给 Vultr 管理员；
 2. 在 Vultr 安装 `rsync`、`rrsync`、Docker 和 OpenSSH，运行 `deploy/vultr/install.sh`；
 3. Vultr 运行 `configure-rsync.sh` 安装 107 公钥，并独立核对 host-key 指纹；
-4. 107 保持旧 raw 原始字节不变；现有 v0.3.7 及以上 runtime 可继续拉取和处理，新装使用
-   v0.3.10 SIF；
+4. 107 保持旧 raw 原始字节不变；新装和本次两端升级统一使用 v0.4.0 SIF；
 5. 107 配置 `central.yaml`，先用 `rsync --list-only` 和一次前台 pull 验证；
 6. 107 安装每分钟 cron，确认至少两个周期均成功；
 7. Vultr 写入 immutable image digest 和正式 60 币配置；
@@ -14,10 +13,12 @@
 9. 确认 Vultr `ready/` 出现 chunk、107 `data/raw` 出现同一 chunk、Vultr 收到 ACK；
 10. 连续观察 24 小时资源指标、gap、ACK 延迟和剩余磁盘。
 
-v0.3.10 启动后必须确认日志没有持续的 `subscription audit`、`targeted subscription recovery incomplete`
+v0.4.0 启动后必须确认日志没有持续的 `subscription audit`、`targeted subscription recovery incomplete`
 或 writer failure，
 `control/collector-lease.json` 为当前 boot 的 `RUNNING`，且每分钟 ACK/ready 数量有进展。一次受控重启
 应产生并在全源 ready 后关闭 `COLLECTOR_STOPPED_GAP`；不能通过删 gap 文件来获得质量通过。
+运行满 24 个完整小时后，UTC 日切只允许出现一次 `public routes rebalanced` 或
+`public route rebalance skipped`；再均衡不应重启容器或改变 active universe。
 
 详细命令分别见 [Vultr 手册](../deploy/vultr/README.md) 和
 [107 手册](../deploy/campus-107/README.md)。
@@ -55,7 +56,7 @@ control/evidence/gap 保存到只读 archive。确认 archive 完整后才重置
 
 v0.3.6 在 v0.3.5 clean-start 合同上增加 107 sealed-day 幂等快速路径。首次发布 sealed day 仍验证
 全部 chunk 大小与 SHA-256；之后只有本地 `SEALED.json` 与远端逐字节一致才跳过历史 raw 重哈希。
-新装时 107 与 Vultr 统一使用 v0.3.10 release。两端 ACK 状态与故障恢复验收见
+新装时 107 与 Vultr 统一使用 v0.4.0 release。两端 ACK 状态与故障恢复验收见
 [ACK 传输审计合同](transfer-ack-observability.md)。
 
 从 v0.3.7 升级 v0.3.8 只要求升级 Vultr edge image、部署脚本和 edge 配置中的可靠性参数及
@@ -73,3 +74,11 @@ snapshot concurrency `4`，并设置 OI startup spread `5`。不得 clean start�
 币、raw、ready、ACK、universe、
 gap、lease 或 formal-start。v0.3.10 不改变 central 合同，107 不需要升级。从 v0.3.8 可在一次
 受控停机中同时应用 v0.3.9 选择配置和 v0.3.10 snapshot 配置，然后直接启动 v0.3.10。
+
+从 v0.3.10 升级 v0.4.0 是 Python import/API 的破坏性升级，但数据合同不变。禁止 clean start，
+不得删除或改写 107 raw/derived，也不得删除 Vultr ready、writing、ACK、transfer ledger、gap、
+lease、formal-start 或 universe。先暂停 107 cron 并等待当前 pull 完成，安装 v0.4.0 SIF、验证并
+完成一次前台 pull 后恢复 cron；随后只对 Vultr 执行一次受控重启。升级前后必须核对 `7.0 / sequence
+8`、60 个成员、`universe_hash` 和 formal-start SHA-256 不变，并确认 ACK/REMOTE_GC 继续推进。
+`control/public-message-rates.json` 也必须保留；它只决定 public route 的每日低频均衡，不是数据迁移
+文件，删除它会无谓地丢失 24 小时负载证据。

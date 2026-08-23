@@ -1,9 +1,9 @@
-# v0.3.10 正式采集实施合同
+# v0.4.0 正式采集实施合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.3.10 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.4.0 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -82,9 +82,14 @@ seal；它不停止或重建任何 Binance 连接，也不产生 `PLANNED_BOUNDA
 由 ingest lock 串行化，因此不会丢弃边界上的事件。
 
 有成员变化时先切换 writer 的 `universe_hash`，再通过现有连接发送
-`UNSUBSCRIBE/SUBSCRIBE`。新增币完成订阅 ACK、L2 snapshot 和第一次 OI 后关闭 gap。gap 的
+在线两阶段订阅更新：所有目标 public/market route 先增加新币，完成订阅 ACK、L2 snapshot、关键流
+首事件和第一次 OI 后，才从旧 route/poller 移除退出成员。gap 的
 `exchange_symbols` 只包含集合差集，不包含未变化的币。因此 candidate 轮换不会让 50 个
 core 出现计划中断。
+
+每个 UTC 日切还会用最近 24 个完整小时的实际 public 消息峰值评估一次 route 均衡。证据不足或
+目标分片不变时不动作；需要搬迁时复用同一全局两阶段交接，不重启 collector，也不产生 universe
+generation 或 `PLANNED_BOUNDARY_GAP`。交接期可能有可去重的重复 raw，但不会先退订形成未登记空窗。
 
 WebSocket 30 秒无任何消息会重连整个异常连接。每个币的 `depth` 与 `bookTicker` 分别以 30 秒
 保守阈值监控，`markPrice@1s` 以 15 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已
@@ -137,7 +142,8 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 目标机器为 1 vCPU、1GiB RAM、25GB 磁盘，不允许通过减少币数或降低采集频率达标。
 
 - Docker：`1.00 CPU`、`768MiB`、`256 PIDs`；
-- 4 个稳定加权 public shards，初始按生产消息率最小负载分配，成员未变化时不跨 route 搬迁；
+- 4 个 public shards，初始按生产消息率分配；运行期只在 UTC 日切且具备 24 个完整小时证据时
+  执行一次无重启再均衡；
 - WebSocket queue 为 16，单消息上限 2MiB；
 - 1,000 档 snapshot 起点全局最小间隔 0.75 秒、最多 4 个 HTTP 在途，持续上限约 1,600
   request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；

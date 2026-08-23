@@ -3,17 +3,17 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
-from ft_shadow_data_plane.central.retention import apply_retention, expired_unpinned_days
-from ft_shadow_data_plane.contracts.models import (
-    DatasetReleaseV1,
-    DayManifestV1,
-    DayReleaseRefV1,
+from miry.contracts.models import (
+    DatasetRelease,
+    DayManifest,
+    DayReleaseRef,
 )
-from ft_shadow_data_plane.contracts.serde import (
+from miry.contracts.serde import (
     atomic_write_bytes,
     canonical_json_bytes,
     sha256_file,
 )
+from miry.pipeline.retention import apply_retention, expired_unpinned_days
 
 
 def test_retention_removes_only_expired_unpinned_sealed_days(tmp_path: Path) -> None:
@@ -26,11 +26,11 @@ def test_retention_removes_only_expired_unpinned_sealed_days(tmp_path: Path) -> 
     pinned_manifest = _make_day(raw, pinned_day)
     _make_day(raw, expired_day)
     _make_day(raw, recent_day)
-    release = DatasetReleaseV1(
+    release = DatasetRelease(
         release_id="experiment-001",
         created_at=datetime(2026, 8, 10, tzinfo=UTC),
         days=(
-            DayReleaseRefV1(
+            DayReleaseRef(
                 collector_id="tokyo01",
                 utc_date=pinned_day,
                 sealed_manifest_sha256=sha256_file(pinned_manifest),
@@ -63,7 +63,7 @@ def _make_day(raw: Path, utc_date: date) -> Path:
         / f"date={utc_date.isoformat()}"
         / "SEALED.json"
     )
-    manifest = DayManifestV1(
+    manifest = DayManifest(
         collector_id="tokyo01",
         utc_date=utc_date,
         sealed_at=datetime.combine(utc_date + timedelta(days=1), time.min, UTC),

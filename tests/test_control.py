@@ -8,11 +8,11 @@ import orjson
 import pytest
 from universe_fixtures import formal_roles, liquidity_snapshot
 
-from ft_shadow_data_plane.central.control_cli import main as control_main
-from ft_shadow_data_plane.contracts.models import UniverseDecision, UniverseDecisionReason
-from ft_shadow_data_plane.contracts.serde import universe_hash
-from ft_shadow_data_plane.edge.config import UniversePolicyConfig
-from ft_shadow_data_plane.edge.universe import UniverseStore, _next_version
+from miry.cli.control import main as control_main
+from miry.collector.config import UniversePolicyConfig
+from miry.collector.membership import UniverseStore, _next_version
+from miry.contracts.models import UniverseDecision, UniverseDecisionReason
+from miry.contracts.serde import universe_hash
 
 EVIDENCE_HASH = "d" * 64
 

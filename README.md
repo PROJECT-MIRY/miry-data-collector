@@ -1,11 +1,11 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.3.10 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.4.0 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
-`miry-data-collector`。为保持现有生产部署与历史数据合同稳定，Python import
-`ft_shadow_data_plane`、`ft-data-*` CLI、systemd unit 和运行目录名称不变。
+`miry-data-collector`，Python import 根为 `miry`。现网使用的 `ft-data-*` CLI、systemd unit
+和运行目录仍是部署接口；源码不包含旧 `ft_shadow_data_plane` 包或兼容层。
 
 ```text
 Binance -> Vultr collector -> Parquet/Zstd ready/
@@ -17,6 +17,21 @@ Binance -> Vultr collector -> Parquet/Zstd ready/
 Vultr 负责采集、完整 UTC 日流动性证据、排名和增量换币。107 只负责每分钟短时拉取、持久化校验、
 ACK 和 Slurm 处理，不参与选币。成员不变的 UTC 日切不会停止数据源；替换一个币只在线更新
 这个币涉及的订阅和 OI 任务，其余 59 个币保持在线。
+
+源码按职责组织：
+
+```text
+src/miry/
+  collector/  Vultr 实时连接、采集、gap、writer 和 spool
+  universe/   与部署位置无关的证据解析、排名和选币规则
+  pipeline/   107 pull、normalize、L2 重建和 retention
+  contracts/  两端共享的不可变数据合同
+  cli/        命令行入口，只做参数解析和依赖装配
+```
+
+依赖只允许从运行层指向领域/合同层：`collector -> universe -> contracts`，以及
+`pipeline -> contracts`。`universe` 不导入 `collector` 或 `pipeline`。完整权衡见
+[架构与选币职责](docs/architecture.md)。
 
 当前 `7.0` 正式名单证据见
 [结构化 universe clean start](docs/v0.3.5-structured-universe-clean-start.md)，规则、
@@ -105,3 +120,9 @@ add-ready-remove 两阶段交接，不能为了均衡重启采集器或先删除
 当前选币的点差指标使用 21 次、1 秒间隔全市场 bookTicker 的 q95，替代少量 depth/bookTicker
 样本的最大值；3 次 depth snapshot 仅用于 10/50 bps 深度。该变化降低单个异常报价对横截面排名
 的影响，不改变点差仅参与排名、不作为绝对拒绝门槛的规则。
+
+v0.4.0 删除旧 `ft_shadow_data_plane` Python 包和 `central`/`edge` 源码拓扑，改用职责明确的
+`miry.collector`、`miry.pipeline`、`miry.universe`、`miry.contracts` 和 `miry.cli`。这是 Python
+import/API 的破坏性变更，但不改变 raw schema、rsync/ACK、gap、universe identity 或磁盘数据布局；
+两端必须升级 runtime，但禁止 clean start 或删除历史数据。详见
+[v0.4.0 架构重构发布说明](docs/v0.4.0-architecture-refactor-2026-08-23.md)。

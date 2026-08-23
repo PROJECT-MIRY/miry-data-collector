@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "miry-data-collector"
-version = "0.3.10"
+version = "0.4.0"
 description = "Loss-explicit Binance USD-M market data collection and reconstruction"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -27,16 +27,16 @@ dev = [
 ]
 
 [project.scripts]
-ft-data-edge = "ft_shadow_data_plane.edge.cli:main"
-ft-data-pull = "ft_shadow_data_plane.central.pull_cli:main"
-ft-data-process = "ft_shadow_data_plane.central.process_cli:main"
-ft-data-control = "ft_shadow_data_plane.central.control_cli:main"
-ft-data-select = "ft_shadow_data_plane.central.select_cli:main"
-ft-data-release = "ft_shadow_data_plane.central.release_cli:main"
-ft-data-retain = "ft_shadow_data_plane.central.retention_cli:main"
+ft-data-edge = "miry.cli.collect:main"
+ft-data-pull = "miry.cli.pull:main"
+ft-data-process = "miry.cli.process:main"
+ft-data-control = "miry.cli.control:main"
+ft-data-select = "miry.cli.select:main"
+ft-data-release = "miry.cli.release:main"
+ft-data-retain = "miry.cli.retain:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ft_shadow_data_plane"]
+packages = ["src/miry"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -51,7 +51,7 @@ target-version = "py312"
 select = ["A", "ASYNC", "B", "E", "F", "I", "PTH", "RUF", "UP", "W"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ft_shadow_data_plane"]
+known-first-party = ["miry"]
 
 [tool.mypy]
 python_version = "3.12"

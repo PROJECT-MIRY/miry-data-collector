@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from ft_shadow_data_plane.contracts.serde import universe_hash
-from ft_shadow_data_plane.edge.config import load_edge_config
-from ft_shadow_data_plane.edge.sharding import TrafficSharder
+from miry.collector.config import load_collector_config
+from miry.collector.sharding import TrafficSharder
+from miry.contracts.serde import universe_hash
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
@@ -46,7 +46,7 @@ def test_project_and_release_identity_use_miry_name() -> None:
 
 
 def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
-    config = load_edge_config(PROJECT_ROOT / "deploy/vultr/edge.yaml.example")
+    config = load_collector_config(PROJECT_ROOT / "deploy/vultr/edge.yaml.example")
     compose = (PROJECT_ROOT / "deploy/vultr/compose.yaml").read_text(encoding="ascii")
     service = (PROJECT_ROOT / "deploy/vultr/systemd/ft-shadow-data-plane.service").read_text(
         encoding="ascii"

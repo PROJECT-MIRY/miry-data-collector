@@ -47,14 +47,14 @@ writer durability/事件循环阻塞和事件去重。跨日 L2 checkpoint 另�
 
 代码判断基于：
 
-- [edge/sources.py](../src/ft_shadow_data_plane/edge/sources.py)
-- [edge/writer.py](../src/ft_shadow_data_plane/edge/writer.py)
-- [edge/day_index.py](../src/ft_shadow_data_plane/edge/day_index.py)
-- [edge/gaps.py](../src/ft_shadow_data_plane/edge/gaps.py)
-- [edge/spool.py](../src/ft_shadow_data_plane/edge/spool.py)
-- [central/normalize.py](../src/ft_shadow_data_plane/central/normalize.py)
-- [central/binance.py](../src/ft_shadow_data_plane/central/binance.py)
-- [central/process_cli.py](../src/ft_shadow_data_plane/central/process_cli.py)
+- [edge/sources.py](../src/miry/collector/routes.py)
+- [edge/writer.py](../src/miry/collector/writer.py)
+- [edge/day_index.py](../src/miry/collector/day_index.py)
+- [edge/gaps.py](../src/miry/collector/gaps.py)
+- [edge/spool.py](../src/miry/collector/spool.py)
+- [central/normalize.py](../src/miry/pipeline/normalize.py)
+- [central/binance.py](../src/miry/pipeline/parsing.py)
+- [central/process_cli.py](../src/miry/cli/process.py)
 
 ## 1. 单 stream 静默停止
 
@@ -106,7 +106,7 @@ L2 的 `pu` 连续性只能在 depth **恢复后**证明中间丢过更新，不
    `markPrice@1s` 周期信号、订阅列表核验和 23 小时连接重建。若强平事件必须达到逐笔完整性，当前
    Binance `forceOrder` feed 从源头就不满足要求，不能靠 liveness 或去重补足。
 5. liveness gap 需要同时保存 `detected_at` 和保守的 `affected_from`。后者应是该 stream 最后一次
-   成功事件之后的边界；当前 `GapEventV1` 只有 `observed_at_realtime_ns`，不足以表达“在超时后才发现，
+   成功事件之后的边界；当前 `GapEvent` 只有 `observed_at_realtime_ns`，不足以表达“在超时后才发现，
    但可能从此前已经缺失”。central coverage 必须使用 affected interval，而不是只从报警时刻扣减。
 6. refresh 后，`depth` 只有 REST snapshot 与 diff 成功 bridge 后才能关闭无效区间；订阅 ACK 本身
    不能恢复 L2 validity。`bookTicker`/`markPrice` 至少等到该 stream 的第一条新事件再关闭 gap。
@@ -116,7 +116,7 @@ L2 的 `pu` 连续性只能在 depth **恢复后**证明中间丢过更新，不
 ### 2.1 v0.3.0 的两个独立漏洞
 
 本地跨日修复已使 finalize 拒绝：缺文件、空 validity、区间越出 UTC 日、区间重叠、checkpoint
-损坏或 identity 不一致。但 [central/process_cli.py](../src/ft_shadow_data_plane/central/process_cli.py)
+损坏或 identity 不一致。但 [central/process_cli.py](../src/miry/cli/process.py)
 在 v0.3.0 中只要求每个 symbol 有**至少一个非空区间**，没有累加有效时长。一天只有 1 秒 VALID
 也能通过。
 
@@ -145,7 +145,7 @@ expected_ns    = expected_end - expected_start
   操作者临时提供的 `symbols.txt`。sealed artifact 至少应包含 generation、universe hash、成员表和有效区间；
   central 需核对每个 chunk 的 `universe_hash`。
 
-当前 `DayManifestV1` 只有 chunk refs，没有成员表；raw `universe_decision` 可能在更早一天发出，也不能仅靠
+当前 `DayManifest` 只有 chunk refs，没有成员表；raw `universe_decision` 可能在更早一天发出，也不能仅靠
 读取目标日文件恢复 membership。因此应发布一个随 raw 拉取的、不可变且按 hash 寻址的 universe registry，
 或升级 day manifest 明确携带当天 membership windows。
 
@@ -273,7 +273,7 @@ open gap 跨进程状态和多日 rollover。后续故障注入仍可继续扩�
 不是必要条件。去重只需覆盖连接 overlap 和有限乱序窗口，建议按 `(stream, symbol)` 使用有界 LRU/ID
 watermark，并把窗口大小写入 marker；这既支持跨日继承，也避免 107 normalize 内存随全天事件数线性增长。
 
-最后，typed rows 虽然有 `is_duplicate`，但 [central/d0.py](../src/ft_shadow_data_plane/central/d0.py)
+最后，typed rows 虽然有 `is_duplicate`，但 [central/d0.py](../src/miry/pipeline/d0.py)
 汇总 `aggTrade`、trade 和 depth 时没有读取或过滤它。因此已经正确标出的 overlap duplicate 仍会增加
 事件数、成交量和 notional。任何事件计数、强平统计和成交汇总都必须显式采用
 `is_duplicate == false`；raw 与 typed 应保留重复记录以便审计，不能物理删除证据。

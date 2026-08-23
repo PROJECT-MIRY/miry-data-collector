@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ft_shadow_data_plane.central.process_cli import _finalize
+from miry.cli.process import _finalize
 
 
 def test_finalize_rejects_empty_l2_validity(tmp_path: Path) -> None:

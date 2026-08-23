@@ -7,29 +7,29 @@ import orjson
 import pyarrow.parquet as pq
 import pytest
 
-from ft_shadow_data_plane.central.normalize import DEDUP_WINDOW_NS, DayNormalizer, _Deduplicator
-from ft_shadow_data_plane.contracts.data_contract import data_contract_hash_v1
-from ft_shadow_data_plane.contracts.models import (
-    ChunkManifestV1,
+from miry.contracts.collection import data_contract_hash
+from miry.contracts.models import (
+    ChunkManifest,
     ContentType,
-    DayManifestV1,
-    RawEventV1,
+    DayManifest,
+    RawEvent,
     StreamType,
     UniverseDecision,
     UniverseDecisionReason,
 )
-from ft_shadow_data_plane.contracts.schema import raw_events_to_table
-from ft_shadow_data_plane.contracts.serde import (
+from miry.contracts.raw import raw_events_to_table
+from miry.contracts.serde import (
     atomic_write_bytes,
     canonical_json_bytes,
     sha256_file,
     universe_hash,
 )
+from miry.pipeline.normalize import DEDUP_WINDOW_NS, DayNormalizer, _Deduplicator
 
 UTC_DATE = date(2026, 8, 10)
 RECEIVED_NS = int(datetime(2026, 8, 10, 12, tzinfo=UTC).timestamp() * 1_000_000_000)
 UNIVERSE_HASH = "a" * 64
-CONTRACT_HASH = data_contract_hash_v1()
+CONTRACT_HASH = data_contract_hash()
 
 
 def test_normalizer_accepts_manifest_that_matches_raw_chunk(tmp_path: Path) -> None:
@@ -310,7 +310,7 @@ def _write_day(
     manifest_event_count: int | None = None,
     parquet_universe_hash: str | None = None,
     universe_hash_value: str = UNIVERSE_HASH,
-    events: list[RawEventV1] | None = None,
+    events: list[RawEvent] | None = None,
 ) -> tuple[Path, Path]:
     raw_root = tmp_path / "raw"
     derived_root = tmp_path / "derived"
@@ -332,7 +332,7 @@ def _write_day(
     }
     pq.write_table(raw_events_to_table(event_rows).replace_schema_metadata(metadata), raw_path)
     event_count = len(event_rows) if manifest_event_count is None else manifest_event_count
-    manifest = ChunkManifestV1(
+    manifest = ChunkManifest(
         chunk_id="chunk-test",
         data_path=relative.as_posix(),
         sha256=sha256_file(raw_path),
@@ -349,7 +349,7 @@ def _write_day(
         created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
     )
     atomic_write_bytes(raw_path.with_suffix(".manifest.json"), canonical_json_bytes(manifest))
-    day = DayManifestV1(
+    day = DayManifest(
         collector_id="tokyo01",
         utc_date=UTC_DATE,
         sealed_at=datetime(2026, 8, 11, tzinfo=UTC),
@@ -362,7 +362,7 @@ def _write_day(
     return raw_root, derived_root
 
 
-def _default_event() -> RawEventV1:
+def _default_event() -> RawEvent:
     return _raw_event(
         sequence=1,
         stream_type=StreamType.AGG_TRADE,
@@ -383,8 +383,8 @@ def _raw_event(
     payload: bytes,
     symbol: str | None,
     connection_id: str = "connection",
-) -> RawEventV1:
-    return RawEventV1(
+) -> RawEvent:
+    return RawEvent(
         schema_version=1,
         exchange_symbol=symbol,
         stream_type=stream_type,

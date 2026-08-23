@@ -12,17 +12,14 @@ import aiohttp
 import orjson
 import pytest
 
-from ft_shadow_data_plane.contracts.models import GapReason, RawEventV1, StreamType
-from ft_shadow_data_plane.edge.binance import SourceIdentity, public_subscriptions
-from ft_shadow_data_plane.edge.config import load_edge_config
-from ft_shadow_data_plane.edge.readiness import required_realtime_sources
-from ft_shadow_data_plane.edge.scheduling import advance_fixed_deadline, staggered_offsets
-from ft_shadow_data_plane.edge.sources import (
-    ConnectionHandle,
-    RestPollers,
-    RouteRunner,
-    _reconnect_delay,
-)
+from miry.collector.config import load_collector_config
+from miry.collector.polling import RestPollers
+from miry.collector.readiness import required_realtime_sources
+from miry.collector.routes import ConnectionHandle, RouteRunner, _reconnect_delay
+from miry.collector.scheduling import advance_fixed_deadline, staggered_offsets
+from miry.collector.sources import SourceManager
+from miry.collector.websocket import SourceIdentity, public_subscriptions
+from miry.contracts.models import GapReason, RawEvent, StreamType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -45,10 +42,10 @@ class FakeRest:
 
 class FakeIngest:
     def __init__(self, stop: asyncio.Event) -> None:
-        self.events: list[RawEventV1] = []
+        self.events: list[RawEvent] = []
         self._stop = stop
 
-    async def put(self, event: RawEventV1) -> None:
+    async def put(self, event: RawEvent) -> None:
         self.events.append(event)
         if {item.exchange_symbol for item in self.events} == {"BTCUSDT", "ETHUSDT"}:
             self._stop.set()
@@ -89,9 +86,9 @@ class DailyKlineRest:
 
 class RecordingIngest:
     def __init__(self) -> None:
-        self.events: list[RawEventV1] = []
+        self.events: list[RawEvent] = []
 
-    async def put(self, event: RawEventV1) -> None:
+    async def put(self, event: RawEvent) -> None:
         self.events.append(event)
 
 
@@ -263,7 +260,7 @@ async def test_daily_kline_evidence_appends_only_the_new_complete_day(
     tmp_path: Path,
 ) -> None:
     config_path = PROJECT_ROOT / "deploy/vultr/edge.yaml.example"
-    config = load_edge_config(config_path).model_copy(update={"data_root": tmp_path})
+    config = load_collector_config(config_path).model_copy(update={"data_root": tmp_path})
     rest = DailyKlineRest()
     ingest = RecordingIngest()
     stop = asyncio.Event()
@@ -357,8 +354,186 @@ async def test_live_update_only_changes_replaced_symbol_subscriptions() -> None:
     assert update.snapshot_requests == (("NEWUSDT", StreamType.DEPTH_SNAPSHOT),)
     update.acknowledged.set_result(None)
     update.completion.set_result(None)
+    await asyncio.sleep(0)
+    assert not updating.done()
+    runner._mark_event(StreamType.BOOK_TICKER, "NEWUSDT")
+    runner._mark_event(StreamType.DEPTH, "NEWUSDT")
     await updating
     assert runner.instruments == proposed
+
+
+@pytest.mark.asyncio
+async def test_live_update_counts_events_received_while_snapshot_is_pending() -> None:
+    runner = RouteRunner(
+        name="public-0",
+        url="wss://example.invalid/stream",
+        subscriptions=public_subscriptions(("BTCUSDT",), d0_enabled=False),
+        instruments=("BTCUSDT",),
+        stream_types=(StreamType.BOOK_TICKER, StreamType.DEPTH),
+        collector_id="tokyo01",
+        boot_id="boot",
+        ingest=SimpleNamespace(),  # type: ignore[arg-type]
+        queues=FakeQueues(),  # type: ignore[arg-type]
+        gaps=SimpleNamespace(),  # type: ignore[arg-type]
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        rotation_seconds=82_800,
+        overlap_seconds=15,
+        receive_timeout_seconds=30,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        service_stop=asyncio.Event(),
+        subscriptions_for=lambda values: public_subscriptions(values, d0_enabled=False),
+    )
+
+    updating = asyncio.create_task(runner.update_instruments(("BTCUSDT", "ETHUSDT")))
+    update = await asyncio.wait_for(runner._updates.get(), timeout=0.5)
+    runner._mark_event(StreamType.BOOK_TICKER, "ETHUSDT")
+    runner._mark_event(StreamType.DEPTH, "ETHUSDT")
+    update.acknowledged.set_result(None)
+    update.completion.set_result(None)
+
+    await updating
+    assert runner.instruments == ("BTCUSDT", "ETHUSDT")
+
+
+@pytest.mark.asyncio
+async def test_source_manager_moves_symbols_in_add_ready_remove_phases() -> None:
+    expanded: set[str] = set()
+
+    class PlannedSharder:
+        def shards(self, _instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+            return (("AUSDT", "CUSDT"), ("BUSDT", "DUSDT"))
+
+    class RecordingRoute:
+        def __init__(self, name: str, instruments: tuple[str, ...]) -> None:
+            self.name = name
+            self.instruments = instruments
+            self.calls: list[tuple[str, ...]] = []
+
+        async def update_instruments(self, instruments: tuple[str, ...]) -> None:
+            self.calls.append(instruments)
+            if len(self.calls) == 1:
+                expanded.add(self.name)
+            else:
+                assert expanded == {"public-0", "public-1"}
+            self.instruments = instruments
+
+    class RecordingPollers:
+        async def update_instruments(self, _instruments: tuple[str, ...]) -> None:
+            return None
+
+    manager = object.__new__(SourceManager)
+    manager._task = asyncio.current_task()
+    manager._pollers = RecordingPollers()
+    manager._update_lock = asyncio.Lock()
+    manager._public_sharder = PlannedSharder()
+    manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+    public_0 = RecordingRoute("public-0", ("AUSDT", "BUSDT"))
+    public_1 = RecordingRoute("public-1", ("CUSDT", "DUSDT"))
+    manager._routes = {
+        "public-0": public_0,
+        "public-1": public_1,
+        "market-0": RecordingRoute(
+            "market-0", ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+        ),
+    }
+
+    await manager.update_instruments(manager._instruments)
+
+    assert public_0.calls == [
+        ("AUSDT", "BUSDT", "CUSDT"),
+        ("AUSDT", "CUSDT"),
+    ]
+    assert public_1.calls == [
+        ("BUSDT", "CUSDT", "DUSDT"),
+        ("BUSDT", "DUSDT"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_manager_rebalances_once_with_complete_traffic_evidence() -> None:
+    class CompleteTraffic:
+        has_complete_evidence = True
+
+        def effective_rates(self) -> dict[str, int]:
+            return {"AUSDT": 100, "BUSDT": 90, "CUSDT": 10, "DUSDT": 5}
+
+    class RecordingRoute:
+        def __init__(self, instruments: tuple[str, ...]) -> None:
+            self.instruments = instruments
+            self.calls: list[tuple[str, ...]] = []
+
+        async def update_instruments(self, instruments: tuple[str, ...]) -> None:
+            self.calls.append(instruments)
+            self.instruments = instruments
+
+    manager = object.__new__(SourceManager)
+    manager._task = asyncio.current_task()
+    manager._update_lock = asyncio.Lock()
+    manager._config = SimpleNamespace(public_connection_shards=2)
+    manager._traffic = CompleteTraffic()
+    manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+    public_0 = RecordingRoute(("AUSDT", "BUSDT"))
+    public_1 = RecordingRoute(("CUSDT", "DUSDT"))
+    manager._routes = {"public-0": public_0, "public-1": public_1}
+
+    assert await manager.rebalance_public_routes()
+    assert public_0.calls == [
+        ("AUSDT", "BUSDT", "DUSDT"),
+        ("AUSDT", "DUSDT"),
+    ]
+    assert public_1.calls == [
+        ("BUSDT", "CUSDT", "DUSDT"),
+        ("BUSDT", "CUSDT"),
+    ]
+
+    assert not await manager.rebalance_public_routes()
+    assert len(public_0.calls) == 2
+    assert len(public_1.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_source_manager_rolls_back_expansion_before_any_trim_on_failure() -> None:
+    class PlannedSharder:
+        def shards(self, _instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+            return (("AUSDT", "CUSDT"), ("BUSDT", "DUSDT"))
+
+    class RecordingRoute:
+        def __init__(self, instruments: tuple[str, ...], *, fail_first: bool = False) -> None:
+            self.instruments = instruments
+            self.fail_first = fail_first
+            self.calls: list[tuple[str, ...]] = []
+
+        async def update_instruments(self, instruments: tuple[str, ...]) -> None:
+            self.calls.append(instruments)
+            if self.fail_first and len(self.calls) == 1:
+                raise OSError("subscription update failed")
+            self.instruments = instruments
+
+    class RecordingPollers:
+        async def update_instruments(self, _instruments: tuple[str, ...]) -> None:
+            return None
+
+    manager = object.__new__(SourceManager)
+    manager._task = asyncio.current_task()
+    manager._pollers = RecordingPollers()
+    manager._update_lock = asyncio.Lock()
+    manager._public_sharder = PlannedSharder()
+    manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+    public_0 = RecordingRoute(("AUSDT", "BUSDT"), fail_first=True)
+    public_1 = RecordingRoute(("CUSDT", "DUSDT"))
+    manager._routes = {
+        "public-0": public_0,
+        "public-1": public_1,
+        "market-0": RecordingRoute(manager._instruments),
+    }
+
+    with pytest.raises(RuntimeError, match="before old subscriptions were removed"):
+        await manager.update_instruments(manager._instruments)
+
+    assert ("AUSDT", "CUSDT") not in public_0.calls
+    assert ("BUSDT", "DUSDT") not in public_1.calls
+    assert public_1.instruments == ("CUSDT", "DUSDT")
 
 
 @pytest.mark.asyncio
@@ -501,7 +676,7 @@ async def test_liveness_detects_depth_silence_while_book_ticker_continues(
     clock = [0.0]
     stop = asyncio.Event()
     gaps = FakeGaps()
-    monkeypatch.setattr("ft_shadow_data_plane.edge.sources.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("miry.collector.routes.time.monotonic", lambda: clock[0])
     runner = RouteRunner(
         name="public-0",
         url="wss://example.invalid/stream",
@@ -625,7 +800,7 @@ async def test_liveness_refresh_timeout_keeps_route_monitor_running(
     clock = [0.0]
     stop = asyncio.Event()
     gaps = FakeGaps()
-    monkeypatch.setattr("ft_shadow_data_plane.edge.sources.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("miry.collector.routes.time.monotonic", lambda: clock[0])
     runner = RouteRunner(
         name="market-0",
         url="wss://example.invalid/stream",
@@ -690,7 +865,7 @@ async def test_stale_refresh_failure_cannot_reconnect_a_new_connection(
     clock = [0.0]
     stop = asyncio.Event()
     gaps = FakeGaps()
-    monkeypatch.setattr("ft_shadow_data_plane.edge.sources.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("miry.collector.routes.time.monotonic", lambda: clock[0])
     runner = RouteRunner(
         name="market-0",
         url="wss://example.invalid/stream",
@@ -747,7 +922,7 @@ def test_reconnect_backoff_is_exponential_and_capped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.sources.random.uniform",
+        "miry.collector.routes.random.uniform",
         lambda _minimum, _maximum: 1.0,
     )
 
@@ -911,7 +1086,7 @@ async def test_route_reports_transport_recovery_before_snapshots_finish(
             await self.stop.wait()  # type: ignore[union-attr]
 
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.sources.BinanceWebSocketConnection",
+        "miry.collector.routes.BinanceWebSocketConnection",
         ControlledConnection,
     )
     runner = RouteRunner(

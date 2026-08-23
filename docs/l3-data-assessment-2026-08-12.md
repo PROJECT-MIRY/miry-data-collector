@@ -59,9 +59,9 @@ market-by-order/L3**。这不代表 Binance 内部没有逐订单数据，只代
 
 代码依据：
 
-- [正式与 D0 stream 合同](../src/ft_shadow_data_plane/contracts/data_contract.py)
-- [WebSocket 订阅构造](../src/ft_shadow_data_plane/edge/binance.py)
-- [L2 snapshot、diff sequence 与重锚逻辑](../src/ft_shadow_data_plane/central/l2.py)
+- [正式与 D0 stream 合同](../src/miry/contracts/collection.py)
+- [WebSocket 订阅构造](../src/miry/collector/websocket.py)
+- [L2 snapshot、diff sequence 与重锚逻辑](../src/miry/pipeline/l2.py)
 - [Vultr 正式配置](../deploy/vultr/edge.yaml.example)
 
 可选 D0 中的 individual `trade` 与 RPI depth 当前均关闭。即使打开，它们仍分别是成交记录和

@@ -8,14 +8,14 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from ft_shadow_data_plane.central.l2 import (
+from miry.contracts.typed import TYPED_EVENT_SCHEMA
+from miry.pipeline.l2 import (
     ConnectionBook,
     DepthDiff,
     DepthSnapshot,
     L2DayReconstructor,
     L2State,
 )
-from ft_shadow_data_plane.contracts.typed_schema import TYPED_EVENT_SCHEMA_V1
 
 
 def _diff(
@@ -71,7 +71,7 @@ def test_new_anchored_connection_is_explicit_authority_boundary(tmp_path: Path) 
         _typed_snapshot("b", 2, 400, 200),
     ]
     pq.write_table(
-        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA_V1),
+        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA),
         typed_root / "depth.typed.parquet",
     )
     _write_normalized_marker(tmp_path, date(2026, 8, 10), first_formal_day=True)
@@ -438,7 +438,7 @@ def _write_typed_day(root: Path, utc_date: date, rows: list[dict[str, object]]) 
     typed_root = root / "typed" / "collector=tokyo01" / f"date={utc_date.isoformat()}"
     typed_root.mkdir(parents=True)
     pq.write_table(
-        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA_V1),
+        pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA),
         typed_root / "depth.typed.parquet",
     )
     _write_normalized_marker(root, utc_date, first_formal_day=True)
@@ -472,7 +472,7 @@ def _write_gap(
     quality_root = root / "quality" / "collector=tokyo01" / f"date={utc_date.isoformat()}"
     quality_root.mkdir(parents=True, exist_ok=True)
     gap = {
-        "schema_version": 1,
+        "schema_version": 2,
         "gap_id": "gap-cross-day-test",
         "state": state,
         "reason": "CONNECTION_LOST_GAP",

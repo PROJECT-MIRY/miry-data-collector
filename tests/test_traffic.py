@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ft_shadow_data_plane.edge.config import EdgeConfig
-from ft_shadow_data_plane.edge.sharding import TrafficSharder
-from ft_shadow_data_plane.edge.traffic import OBSERVATION_BLOCKS, PublicTrafficRecorder
+from miry.collector.config import CollectorConfig
+from miry.collector.sharding import TrafficSharder
+from miry.collector.traffic import OBSERVATION_BLOCKS, PublicTrafficRecorder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,9 +82,11 @@ def test_observed_rates_require_24_complete_blocks_and_keep_24(tmp_path: Path) -
 
     for block in range(23):
         _record_block(recorder, clock, btc_rate=block + 1, eth_rate=block + 2)
+    assert not recorder.has_complete_evidence
     assert recorder.effective_rates() == {"BTCUSDT": 100, "ETHUSDT": 200}
 
     _record_block(recorder, clock, btc_rate=24, eth_rate=25)
+    assert recorder.has_complete_evidence
     assert recorder.effective_rates() == {"BTCUSDT": 24, "ETHUSDT": 25}
 
     for block in range(24, 26):
@@ -104,7 +106,7 @@ async def test_traffic_state_write_failure_does_not_stop_collection(
         raise OSError("disk unavailable")
 
     monkeypatch.setattr(
-        "ft_shadow_data_plane.edge.traffic.atomic_write_bytes",
+        "miry.collector.traffic.atomic_write_bytes",
         fail_write,
     )
 
@@ -126,7 +128,7 @@ def test_message_rates_are_decoupled_from_current_universe() -> None:
     raw = yaml.safe_load((PROJECT_ROOT / "deploy/vultr/edge.yaml.example").read_bytes())
     raw["message_rates"] = {"BTCUSDT": 100}
 
-    config = EdgeConfig.model_validate(raw)
+    config = CollectorConfig.model_validate(raw)
 
     assert config.message_rates == {"BTCUSDT": 100}
 
@@ -136,4 +138,4 @@ def test_old_load_weight_field_is_rejected() -> None:
     raw["public_symbol_load_weights"] = raw.pop("message_rates")
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        EdgeConfig.model_validate(raw)
+        CollectorConfig.model_validate(raw)

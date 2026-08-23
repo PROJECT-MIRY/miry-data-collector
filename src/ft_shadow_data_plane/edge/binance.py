@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -582,15 +581,6 @@ def market_subscriptions(instruments: tuple[str, ...]) -> tuple[str, ...]:
     ]
     streams.append("!contractInfo")
     return tuple(streams)
-
-
-def shard_instruments(instruments: tuple[str, ...], count: int) -> tuple[tuple[str, ...], ...]:
-    shard_count = min(count, len(instruments))
-    shards: list[list[str]] = [[] for _ in range(shard_count)]
-    for symbol in sorted(instruments):
-        digest = hashlib.sha256(symbol.encode("ascii")).digest()
-        shards[int.from_bytes(digest[:8], "big") % shard_count].append(symbol)
-    return tuple(tuple(shard) for shard in shards)
 
 
 def _is_subscription_ack(value: dict[str, Any] | None, expected_id: int) -> bool:

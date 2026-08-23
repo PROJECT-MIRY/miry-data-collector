@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 
-class StableWeightedSharder:
-    """Balance symbols by observed load while preserving stable route assignments."""
+class TrafficSharder:
+    """Balance symbols by message rate while preserving existing route assignments."""
 
-    def __init__(self, count: int, weights: dict[str, int]) -> None:
+    def __init__(self, count: int, message_rates: dict[str, int]) -> None:
         if count < 1:
             raise ValueError("shard count must be positive")
         self._count = count
-        self._weights = weights
+        self._message_rates = message_rates
         self._assignments: dict[str, int] = {}
 
     def shards(self, instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
@@ -26,16 +26,16 @@ class StableWeightedSharder:
         loads = [0] * shard_count
         for symbol, shard in sorted(self._assignments.items()):
             shards[shard].append(symbol)
-            loads[shard] += self._weight(symbol)
+            loads[shard] += self._message_rate(symbol)
         unassigned = sorted(
             active - self._assignments.keys(),
-            key=lambda symbol: (-self._weight(symbol), symbol),
+            key=lambda symbol: (-self._message_rate(symbol), symbol),
         )
         for symbol in unassigned:
             shard = min(range(shard_count), key=lambda index: (loads[index], index))
             self._assignments[symbol] = shard
             shards[shard].append(symbol)
-            loads[shard] += self._weight(symbol)
+            loads[shard] += self._message_rate(symbol)
         if initial_assignment:
             self._improve_initial_balance(shards, loads)
             self._assignments = {
@@ -43,11 +43,11 @@ class StableWeightedSharder:
             }
         return tuple(tuple(sorted(shard)) for shard in shards)
 
-    def _weight(self, symbol: str) -> int:
-        if symbol in self._weights:
-            return self._weights[symbol]
-        if self._weights:
-            ordered = sorted(self._weights.values())
+    def _message_rate(self, symbol: str) -> int:
+        if symbol in self._message_rates:
+            return self._message_rates[symbol]
+        if self._message_rates:
+            ordered = sorted(self._message_rates.values())
             return ordered[len(ordered) // 2]
         return 1
 
@@ -62,13 +62,13 @@ class StableWeightedSharder:
                         for right_symbol in shards[right]:
                             next_left = (
                                 loads[left]
-                                - self._weight(left_symbol)
-                                + self._weight(right_symbol)
+                                - self._message_rate(left_symbol)
+                                + self._message_rate(right_symbol)
                             )
                             next_right = (
                                 loads[right]
-                                - self._weight(right_symbol)
-                                + self._weight(left_symbol)
+                                - self._message_rate(right_symbol)
+                                + self._message_rate(left_symbol)
                             )
                             next_loads = [*loads]
                             next_loads[left] = next_left

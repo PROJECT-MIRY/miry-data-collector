@@ -24,8 +24,9 @@ Vultr 每天 `23:50 UTC` 用两次 `exchangeInfo` 包围完整证据抓取。只
 `TRADING` 的 USDT 保证金、USDT 报价永续合约才合格。历史活跃度来自完整 UTC 日 Kline，
 当天未结束的 Kline 永不进入决策。首次抓 35 日，随后从已落盘证据增量追加刚结束的一日；
 最近 14 日用于单币排名，前 28 日与最近 1/3/7 日用于市场状态。盘口证据覆盖活跃度预排的
-mature Top200、recent Top100 和当前 active 60 的并集，采集 5 次全市场 bookTicker 与 3 次
-`limit=100` depth。原始内容、时间和 SHA-256 都写入 decision evidence 和 raw metadata。
+mature Top200、recent Top100 和当前 active 60 的并集，在约 20 秒内采集 21 次全市场 bookTicker，
+另采集 3 次 `limit=100` depth。原始内容、时间和 SHA-256 都写入 decision evidence 和 raw
+metadata。
 
 硬拒绝只用于技术资格和证据有效性：角色要求的完整 UTC 日齐备；bookTicker/depth 样本数量、
 数值和盘口结构可解析。成交额、交易数、点差和两档 depth 不设绝对流动性门槛，也不存在 CV
@@ -38,7 +39,8 @@ mature Top200、recent Top100 和当前 active 60 的并集，采集 5 次全市
 - core/boundary 使用最近 14 个完整 UTC 日且上市至少 30 日；probe 优先在上市不足 30 日、至少
   有 7 个完整日的 recent cohort 内排名，人数不足时才按上市时间从年轻的 mature 合约补足储备；
 - 每个池分别对 P25 quote volume、P25 trades、10 bps 较薄侧 depth、50 bps 较薄侧 depth
-  降序排名，对最差点差升序排名；
+  降序排名，对 21 次 bookTicker 点差的 q95 升序排名；单个极端点不进入 q95，depth snapshot
+  只计算深度，不再把 3 个样本的最大点差混入排名；
 - 聚合顺序为“最差单项名次、名次总和、五项名次元组、symbol”，防止一个极强指标掩盖另一项
   极弱指标，同时保持结果确定；
 - mature 横截面 Top50 为 core，其后候选用于 boundary；recent 横截面最优者用于 probe；

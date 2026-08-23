@@ -11,6 +11,7 @@ from ft_shadow_data_plane.central.cross_section import rank_cross_section
 from ft_shadow_data_plane.central.market_context import MarketState
 from ft_shadow_data_plane.central.selector import (
     RollingPolicy,
+    _depth_metrics,
     select_bootstrap_universe,
     select_rolling_universe,
 )
@@ -68,6 +69,18 @@ def test_wide_spread_and_shallow_depth_are_ranked_instead_of_rejected() -> None:
 
     assert result.mature_pool_count == 65
     assert "S000USDT" not in result.core
+
+
+def test_spread_q95_ignores_one_extreme_book_ticker_sample() -> None:
+    observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
+    snapshot = liquidity_snapshot(
+        observed,
+        spread_outlier=frozenset({"S000USDT"}),
+    )
+
+    metrics = _depth_metrics(snapshot.liquidity_depth)
+
+    assert metrics["S000USDT"].spread_q95_bps == Decimal("2")
 
 
 def test_monday_core_rotation_uses_robust_rank_and_hysteresis() -> None:

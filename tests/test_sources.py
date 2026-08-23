@@ -17,7 +17,6 @@ from ft_shadow_data_plane.edge.binance import SourceIdentity, public_subscriptio
 from ft_shadow_data_plane.edge.config import load_edge_config
 from ft_shadow_data_plane.edge.readiness import required_realtime_sources
 from ft_shadow_data_plane.edge.scheduling import advance_fixed_deadline, staggered_offsets
-from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
 from ft_shadow_data_plane.edge.sources import (
     ConnectionHandle,
     RestPollers,
@@ -742,42 +741,6 @@ async def test_stale_refresh_failure_cannot_reconnect_a_new_connection(
     await asyncio.wait_for(runner.liveness_loop(), timeout=0.5)
 
     assert not runner._reconnect_requested.is_set()
-
-
-def test_weighted_sharder_balances_hot_symbols_and_preserves_existing_routes() -> None:
-    weights = {
-        "BTCUSDT": 9_300,
-        "ETHUSDT": 16_900,
-        "XRPUSDT": 8_500,
-        "DOGEUSDT": 8_400,
-        "SOLUSDT": 4_100,
-        "PUMPUSDT": 7_100,
-        "ZECUSDT": 6_300,
-        "ADAUSDT": 2_300,
-        "BNBUSDT": 3_000,
-        "LINKUSDT": 4_500,
-        "LTCUSDT": 2_300,
-        "SUIUSDT": 3_500,
-    }
-    sharder = StableWeightedSharder(4, weights)
-    initial = tuple(weights)
-
-    shards = sharder.shards(initial)
-    loads = [sum(weights[symbol] for symbol in shard) for shard in shards]
-    assignments = {
-        symbol: index for index, shard in enumerate(shards) for symbol in shard
-    }
-
-    assert max(loads) / min(loads) < 1.10
-    updated = sharder.shards((*initial[1:], "NEWUSDT"))
-    updated_assignments = {
-        symbol: index for index, shard in enumerate(updated) for symbol in shard
-    }
-    assert all(
-        updated_assignments[symbol] == route
-        for symbol, route in assignments.items()
-        if symbol != initial[0]
-    )
 
 
 def test_reconnect_backoff_is_exponential_and_capped(

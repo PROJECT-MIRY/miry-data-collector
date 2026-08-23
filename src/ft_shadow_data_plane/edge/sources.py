@@ -35,7 +35,8 @@ from ft_shadow_data_plane.edge.queue import ByteBoundedQueues, QueueOverloaded
 from ft_shadow_data_plane.edge.readiness import SourceReadiness
 from ft_shadow_data_plane.edge.rest import BinanceRestClient
 from ft_shadow_data_plane.edge.scheduling import advance_fixed_deadline, staggered_offsets
-from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
+from ft_shadow_data_plane.edge.sharding import TrafficSharder
+from ft_shadow_data_plane.edge.traffic import PublicTrafficRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,7 @@ class RouteRunner:
         rotation_offset_seconds: float = 0,
         d0_enabled: bool = False,
         on_ready: Callable[[str], None] | None = None,
+        on_message: Callable[[str, str], None] | None = None,
         subscriptions_for: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
         liveness_timeout_seconds: float | None = None,
         liveness_stream_types: tuple[StreamType, ...] | None = None,
@@ -103,6 +105,7 @@ class RouteRunner:
         self._service_stop = service_stop
         self._d0_enabled = d0_enabled
         self._on_ready = on_ready or (lambda _: None)
+        self._on_message = on_message
         self._subscriptions_for = subscriptions_for
         self._updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue(maxsize=1)
         self._update_lock = asyncio.Lock()
@@ -323,6 +326,8 @@ class RouteRunner:
                     future.cancel()
 
     def _mark_event(self, stream_type: StreamType, symbol: str | None) -> None:
+        if symbol is not None and self._on_message is not None:
+            self._on_message(self._name, symbol)
         key = (stream_type, symbol)
         if key in self._last_event:
             self._last_event[key] = (time.monotonic(), time.time_ns())
@@ -1027,7 +1032,7 @@ class RestPollers:
                 }
             )
             if sample_number < self._config.universe.liquidity_book_ticker_samples:
-                await _wait_event(self._stop, 5)
+                await _wait_event(self._stop, 1)
         rounds = self._config.universe.liquidity_depth_samples
         for round_number in range(1, rounds + 1):
             for symbol in symbols:
@@ -1198,9 +1203,13 @@ class SourceManager:
         self._pollers: RestPollers | None = None
         self._instruments: tuple[str, ...] = ()
         self._update_lock = asyncio.Lock()
-        self._public_sharder = StableWeightedSharder(
+        self._traffic = PublicTrafficRecorder(
+            config.data_root / "control/public-message-rates.json",
+            config.message_rates,
+        )
+        self._public_sharder = TrafficSharder(
             config.public_connection_shards,
-            config.public_symbol_load_weights,
+            self._traffic.effective_rates(),
         )
 
     @property
@@ -1324,6 +1333,7 @@ class SourceManager:
                     service_stop=stop,
                     d0_enabled=self._config.d0_enabled,
                     on_ready=readiness.mark,
+                    on_message=self._traffic.record,
                     subscriptions_for=lambda values: public_subscriptions(
                         values, d0_enabled=self._config.d0_enabled
                     ),
@@ -1400,7 +1410,7 @@ class SourceManager:
                 on_discovery=self._on_discovery,
             )
             self._pollers = pollers
-            routes.append(pollers.run())
+            routes.extend((pollers.run(), self._traffic.run(stop)))
             try:
                 await asyncio.gather(*routes)
             finally:

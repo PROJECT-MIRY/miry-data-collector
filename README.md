@@ -94,3 +94,13 @@ symbol 串行阻塞。实时 source readiness 与约 6 分钟的 universe discov
 首轮在 5 秒内错峰完成，正式重启不再等待整轮选币证据。正式名单、raw、rsync/ACK 和 107 合同
 不变。设计与验收见
 [v0.3.10 snapshot 调度记录](docs/v0.3.10-snapshot-scheduler-2026-08-23.md)。
+
+当前代码把静态路由基准升级为简单的长期流量观测：`message_rates` 表示每币每分钟 public
+WebSocket 消息数，采集器按完整分钟计数、每 60 分钟保存一个峰值块，并只保留最近 24 块。状态少于
+6 个完整块时继续使用配置基准；证据充足后仅在下一次进程启动时采用观测峰值，运行中不迁移已有
+symbol。该状态不改变 50/5/5 身份、raw 或 107 合同，详见
+[public 流量均衡](docs/traffic-balancing.md)。
+
+当前选币的点差指标使用 21 次、1 秒间隔全市场 bookTicker 的 q95，替代少量 depth/bookTicker
+样本的最大值；3 次 depth snapshot 仅用于 10/50 bps 深度。该变化降低单个异常报价对横截面排名
+的影响，不改变点差仅参与排名、不作为绝对拒绝门槛的规则。

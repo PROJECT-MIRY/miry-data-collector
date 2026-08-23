@@ -13,7 +13,7 @@ import pytest
 
 from ft_shadow_data_plane.contracts.serde import universe_hash
 from ft_shadow_data_plane.edge.config import load_edge_config
-from ft_shadow_data_plane.edge.sharding import StableWeightedSharder
+from ft_shadow_data_plane.edge.sharding import TrafficSharder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
@@ -93,19 +93,19 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
         tuple(frozen["probe"]),
     )
     assert config.public_connection_shards == 4
-    assert len(config.public_symbol_load_weights) == 60
-    shards = StableWeightedSharder(
+    assert len(config.message_rates) == 60
+    shards = TrafficSharder(
         config.public_connection_shards,
-        config.public_symbol_load_weights,
+        config.message_rates,
     ).shards(config.universe.members)
     shard_sizes = sorted(len(shard) for shard in shards)
-    shard_loads = [
-        sum(config.public_symbol_load_weights[symbol] for symbol in shard)
+    route_rates = [
+        sum(config.message_rates[symbol] for symbol in shard)
         for shard in shards
     ]
     assert sum(shard_sizes) == 60
     assert max(shard_sizes) <= 18
-    assert max(shard_loads) / min(shard_loads) < 1.05
+    assert max(route_rates) / min(route_rates) < 1.05
     single_route_snapshot_wait = (max(shard_sizes) - 1) * (
         config.snapshot_request_interval_seconds
     )

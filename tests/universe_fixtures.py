@@ -24,6 +24,7 @@ def liquidity_snapshot(
     incomplete: frozenset[str] = frozenset(),
     missing_depth: frozenset[str] = frozenset(),
     weak_market: frozenset[str] = frozenset(),
+    spread_outlier: frozenset[str] = frozenset(),
     low_activity: frozenset[str] = frozenset(),
     volatile_activity: frozenset[str] = frozenset(),
     activity_factor: int = 1,
@@ -113,8 +114,22 @@ def liquidity_snapshot(
         {
             "schema_version": 1,
             "book_tickers": [
-                {"sample": sample, "payload": book_rows, "response_sha256": "c" * 64}
-                for sample in range(1, 6)
+                {
+                    "sample": sample,
+                    "payload": [
+                        {
+                            **row,
+                            **(
+                                {"bidPrice": "50", "askPrice": "150"}
+                                if sample == 1 and row["symbol"] in spread_outlier
+                                else {}
+                            ),
+                        }
+                        for row in book_rows
+                    ],
+                    "response_sha256": "c" * 64,
+                }
+                for sample in range(1, 22)
             ],
             "symbols": depth_rows,
         }

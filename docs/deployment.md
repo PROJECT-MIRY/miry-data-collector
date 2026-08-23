@@ -59,7 +59,7 @@ v0.3.6 在 v0.3.5 clean-start 合同上增加 107 sealed-day 幂等快速路径�
 [ACK 传输审计合同](transfer-ack-observability.md)。
 
 从 v0.3.7 升级 v0.3.8 只要求升级 Vultr edge image、部署脚本和 edge 配置中的可靠性参数及
-60 个 load weight。不得 clean start，不得删除或重写 raw、ready、writing、ACK、universe、gap、
+60 个初始 message rate。不得 clean start，不得删除或重写 raw、ready、writing、ACK、universe、gap、
 lease 或 formal-start。升级前后核对 `7.0 / sequence 8`、60 个成员、`universe_hash` 与
 formal-start SHA-256 不变；只执行一次受控重启并等待全部 route snapshot ready。v0.3.8 不改变
 raw、rsync 或 central 合同，107 可继续运行 v0.3.7 pull/processing runtime。

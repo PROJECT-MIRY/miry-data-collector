@@ -37,7 +37,7 @@ class UniversePolicyConfig(BaseModel):
     )
     market_context_minimum_instruments: int = Field(default=60, ge=60)
     liquidity_depth_samples: int = Field(default=3, ge=3, le=5)
-    liquidity_book_ticker_samples: int = Field(default=5, ge=3, le=10)
+    liquidity_book_ticker_samples: int = Field(default=21, ge=21, le=30)
     depth_mature_candidate_count: int = Field(default=200, ge=60, le=200)
     depth_probe_candidate_count: int = Field(default=100, ge=10, le=100)
     liquidity_request_interval_seconds: float = Field(default=0.25, ge=0.1, le=2)
@@ -119,7 +119,7 @@ class EdgeConfig(BaseModel):
     market_ws_url: str
     rest_url: str
     public_connection_shards: int = Field(default=4, ge=1, le=4)
-    public_symbol_load_weights: dict[str, int] = Field(default_factory=dict)
+    message_rates: dict[str, int] = Field(default_factory=dict)
     connection_rotation_seconds: int = Field(default=82_800, ge=3_600, le=86_000)
     connection_overlap_seconds: int = Field(default=15, ge=1, le=120)
     websocket_receive_timeout_seconds: float = Field(default=30.0, ge=5, le=300)
@@ -154,24 +154,20 @@ class EdgeConfig(BaseModel):
     d0_enabled: bool = False
     log_level: str = "INFO"
 
-    @field_validator("public_symbol_load_weights")
+    @field_validator("message_rates")
     @classmethod
-    def validate_public_symbol_load_weights(cls, values: dict[str, int]) -> dict[str, int]:
-        normalized = {symbol.upper(): weight for symbol, weight in values.items()}
+    def validate_message_rates(cls, values: dict[str, int]) -> dict[str, int]:
+        normalized = {symbol.upper(): rate for symbol, rate in values.items()}
         if len(normalized) != len(values):
-            raise ValueError("public symbol load weights contain duplicate symbols")
+            raise ValueError("message rates contain duplicate symbols")
         if any(not SYMBOL_PATTERN.fullmatch(symbol) for symbol in normalized):
-            raise ValueError("public symbol load weights contain an invalid symbol")
-        if any(weight <= 0 for weight in normalized.values()):
-            raise ValueError("public symbol load weights must be positive")
+            raise ValueError("message rates contain an invalid symbol")
+        if any(rate <= 0 for rate in normalized.values()):
+            raise ValueError("message rates must be positive")
         return normalized
 
     @model_validator(mode="after")
     def validate_ratios(self) -> EdgeConfig:
-        if self.public_symbol_load_weights and set(self.public_symbol_load_weights) != set(
-            self.universe.members
-        ):
-            raise ValueError("public symbol load weights must cover the configured universe")
         if self.queue_resume_ratio >= self.queue_warn_ratio:
             raise ValueError("queue_resume_ratio must be below queue_warn_ratio")
         if self.day_seal_grace_seconds <= self.public_stream_liveness_seconds:

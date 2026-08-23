@@ -80,7 +80,7 @@ universe:
   market_context_breadth_ratio: 0.70
   market_context_minimum_instruments: 60
   liquidity_depth_samples: 3
-  liquidity_book_ticker_samples: 5
+  liquidity_book_ticker_samples: 21
   depth_mature_candidate_count: 200
   depth_probe_candidate_count: 100
   liquidity_request_interval_seconds: 0.25
@@ -97,7 +97,9 @@ public_ws_url: wss://fstream.binance.com/public/stream
 market_ws_url: wss://fstream.binance.com/market/stream
 rest_url: https://fapi.binance.com
 public_connection_shards: 4
-public_symbol_load_weights:
+# Observed public WebSocket messages per minute. Runtime observations replace
+# these bootstrap rates after six complete hours.
+message_rates:
   1000BONKUSDT: 361
   1000PEPEUSDT: 509
   1000SHIBUSDT: 377

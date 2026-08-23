@@ -72,9 +72,12 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 ## 4. 配置正式 60 币和镜像
 
-`/etc/ft-shadow-data-plane/edge.yaml` 必须使用仓库 v0.3.10 schema。核对三个角色为 50/5/5、
+`/etc/ft-shadow-data-plane/edge.yaml` 必须使用当前 checkout 的 schema。核对三个角色为 50/5/5、
 `bootstrap_evidence_sha256` 与正式报告一致、`automation_enabled: true`、public shards 为 4，
-queue 为 64MiB，并且 `public_symbol_load_weights` 恰好覆盖当前 60 币。不要加入旧字段。
+queue 为 64MiB。`message_rates` 的单位是每分钟 public WebSocket 消息数，它是冷启动基准，不要求
+与当前 60 币完全相同；没有观测值的新币使用已知速率中位数。旧的 load-weight 配置字段已删除，
+不能与新字段同时保留。长期观测规则见
+[public 流量均衡](../../docs/traffic-balancing.md)。
 
 在 `/etc/ft-shadow-data-plane/edge.env` 中写 immutable digest：
 
@@ -152,7 +155,8 @@ FORMAL_COLLECTION_STARTED ... universe_version=<major.revision> decision_sequenc
 
 原地升级读取原有 `7.0 / sequence 8`，不会重新写 formal start。首次 discovery 补齐 35 个完整
 UTC 日后才评估；缺证据或 market context pending 时保持当前名单。成交额、交易数、点差和 depth
-仅参与横截面排名，不再触发绝对门槛拒绝。
+仅参与横截面排名，不再触发绝对门槛拒绝。点差取 21 次、1 秒间隔 bookTicker 的 q95；3 次 depth
+snapshot 只提供 10/50 bps 深度。
 
 同时确认：
 
@@ -260,7 +264,7 @@ collector status 周期，并确认 ready chunk 和 107 ACK 均持续推进。10
 
 从 v0.3.7 升级 v0.3.8 不执行第 5 节 clean start。先备份 `edge.yaml`、`edge.env`，记录 active
 universe、formal-start 哈希和 open gap；安装新部署脚本后，把示例中的 60 个
-`public_symbol_load_weights` 及可靠性参数合入现有配置，不能覆盖现有正式名单。更新 immutable
+静态 message-rate 基准及可靠性参数合入现有配置，不能覆盖现有正式名单。更新 immutable
 image digest 后只执行一次受控重启。重启后要求 `7.0 / sequence 8`、60 币和哈希不变，所有 route
 完成 snapshot ready，open gap 回到 0，107 ACK 继续推进。107 不需要升级。
 

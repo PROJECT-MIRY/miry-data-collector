@@ -38,7 +38,7 @@ class RollingPolicy:
     market_context_breadth_ratio: Decimal = Decimal("0.70")
     market_context_minimum_instruments: int = 60
     liquidity_depth_samples: int = 3
-    liquidity_book_ticker_samples: int = 5
+    liquidity_book_ticker_samples: int = 21
     depth_mature_candidate_count: int = 200
     depth_probe_candidate_count: int = 100
     candidate_minimum_dwell_hours: int = 48
@@ -107,11 +107,10 @@ class _HistoricalRow:
 class _MarketRow:
     history: _HistoricalRow
     depth_sample_count: int
-    depth_worst_spread_bps: Decimal
     thin_depth_10bps: Decimal
     thin_depth_50bps: Decimal
     book_ticker_sample_count: int
-    book_ticker_worst_spread_bps: Decimal
+    spread_q95_bps: Decimal
 
     @property
     def symbol(self) -> str:
@@ -133,9 +132,14 @@ class _MarketRow:
     def q25_trades(self) -> Decimal:
         return self.history.q25_trades
 
-    @property
-    def worst_spread_bps(self) -> Decimal:
-        return max(self.depth_worst_spread_bps, self.book_ticker_worst_spread_bps)
+
+@dataclass(frozen=True, slots=True)
+class _LiquidityMetrics:
+    depth_sample_count: int
+    thin_depth_10bps: Decimal
+    thin_depth_50bps: Decimal
+    book_ticker_sample_count: int
+    spread_q95_bps: Decimal
 
 
 def select_bootstrap_universe(
@@ -522,23 +526,26 @@ def _market_rows(
         policy=policy,
     )
     depth = _depth_metrics(snapshot.liquidity_depth)
-    rows = [
-        _MarketRow(
-            history,
-            *depth.get(
-                history.symbol,
-                (
-                    0,
-                    Decimal("Infinity"),
-                    Decimal(),
-                    Decimal(),
-                    0,
-                    Decimal("Infinity"),
-                ),
-            ),
+    missing_metrics = _LiquidityMetrics(
+        depth_sample_count=0,
+        thin_depth_10bps=Decimal(),
+        thin_depth_50bps=Decimal(),
+        book_ticker_sample_count=0,
+        spread_q95_bps=Decimal("Infinity"),
+    )
+    rows: list[_MarketRow] = []
+    for history in histories:
+        metrics = depth.get(history.symbol, missing_metrics)
+        rows.append(
+            _MarketRow(
+                history=history,
+                depth_sample_count=metrics.depth_sample_count,
+                thin_depth_10bps=metrics.thin_depth_10bps,
+                thin_depth_50bps=metrics.thin_depth_50bps,
+                book_ticker_sample_count=metrics.book_ticker_sample_count,
+                spread_q95_bps=metrics.spread_q95_bps,
+            )
         )
-        for history in histories
-    ]
     return rows, inactive
 
 
@@ -646,8 +653,8 @@ def _complete_market_evidence(row: _MarketRow, policy: RollingPolicy) -> bool:
     return (
         row.depth_sample_count == policy.liquidity_depth_samples
         and row.book_ticker_sample_count == policy.liquidity_book_ticker_samples
-        and row.worst_spread_bps.is_finite()
-        and row.worst_spread_bps >= 0
+        and row.spread_q95_bps.is_finite()
+        and row.spread_q95_bps >= 0
         and row.thin_depth_10bps.is_finite()
         and row.thin_depth_10bps >= 0
         and row.thin_depth_50bps.is_finite()
@@ -675,7 +682,7 @@ def _rank_market_rows(rows: list[_MarketRow]) -> list[_MarketRow]:
             (lambda row: row.q25_trades, True),
             (lambda row: row.thin_depth_10bps, True),
             (lambda row: row.thin_depth_50bps, True),
-            (lambda row: row.worst_spread_bps, False),
+            (lambda row: row.spread_q95_bps, False),
         ),
     )
 
@@ -698,7 +705,7 @@ def _market_context(rows: list[_MarketRow], policy: RollingPolicy) -> MarketCont
 
 def _depth_metrics(
     raw: bytes,
-) -> dict[str, tuple[int, Decimal, Decimal, Decimal, int, Decimal]]:
+) -> dict[str, _LiquidityMetrics]:
     payload = orjson.loads(raw)
     if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), dict):
         raise ValueError("liquidity depth evidence must contain a symbols object")
@@ -719,11 +726,10 @@ def _depth_metrics(
                 (ask - bid) / midpoint * Decimal(10_000)
             )
 
-    result: dict[str, tuple[int, Decimal, Decimal, Decimal, int, Decimal]] = {}
+    result: dict[str, _LiquidityMetrics] = {}
     for symbol, samples in payload["symbols"].items():
         if not isinstance(symbol, str) or not isinstance(samples, list):
             raise ValueError("invalid liquidity depth evidence")
-        spreads: list[Decimal] = []
         thin_depths: list[Decimal] = []
         thin_depths_50bps: list[Decimal] = []
         for sample in samples:
@@ -734,7 +740,6 @@ def _depth_metrics(
             asks = _book_levels(depth, "asks", symbol)
             best_bid, best_ask = bids[0][0], asks[0][0]
             midpoint = (best_bid + best_ask) / 2
-            spreads.append((best_ask - best_bid) / midpoint * Decimal(10_000))
             bid_floor = midpoint * (1 - TEN_BPS)
             ask_ceiling = midpoint * (1 + TEN_BPS)
             bid_depth = sum(
@@ -765,15 +770,20 @@ def _depth_metrics(
                 Decimal(),
             )
             thin_depths_50bps.append(min(bid_depth_50bps, ask_depth_50bps))
-        if spreads:
+        if thin_depths:
             ticker_spreads = book_spreads.get(symbol, [])
-            result[symbol] = (
-                len(spreads),
-                max(spreads),
-                min(thin_depths),
-                min(thin_depths_50bps),
-                len(ticker_spreads),
-                max(ticker_spreads, default=Decimal("Infinity")),
+            result[symbol] = _LiquidityMetrics(
+                depth_sample_count=len(thin_depths),
+                thin_depth_10bps=min(thin_depths),
+                thin_depth_50bps=min(thin_depths_50bps),
+                book_ticker_sample_count=len(ticker_spreads),
+                spread_q95_bps=_percentile(
+                    values=tuple(ticker_spreads),
+                    numerator=19,
+                    denominator=20,
+                )
+                if ticker_spreads
+                else Decimal("Infinity"),
             )
     return result
 

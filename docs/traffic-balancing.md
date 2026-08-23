@@ -15,12 +15,13 @@
 /data/control/public-message-rates.json
 ```
 
-少于 6 个块时，分片使用 `edge.yaml` 中的 `message_rates`。达到 6 个块后，使用最近最多 24 个块
+少于 24 个块时，分片使用 `edge.yaml` 中的 `message_rates`。达到 24 个块后，使用最近 24 个块
 的逐币峰值。没有历史的新币使用已知速率的中位数。
 
-分片只在采集器进程启动时读取一次有效速率。运行期间换币时保留所有仍在线 symbol 的 route，只把
-新币放到当前估算流量最低的 route；短期流量变化不会搬迁已有订阅。因此均衡机制不会主动制造
-transport gap 或 L2 snapshot bridge。
+运行期间换币时保留所有仍在线 symbol 的 route，只把新币放到当前估算流量最低的 route。持续失衡
+需要在线修正时，必须一次只迁移一个 symbol，并按 `target subscribe -> ACK/首事件/L2 snapshot ->
+source unsubscribe` 的顺序交接。新 route 未就绪时旧 route 继续收包；交接失败则移除新订阅并保留
+旧订阅。交接期重复事件由 central 去重，不能通过重启或先退订制造数据空窗。
 
 ## 故障边界
 

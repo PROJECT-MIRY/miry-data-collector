@@ -17,8 +17,7 @@ from ft_shadow_data_plane.contracts.serde import atomic_write_bytes, canonical_j
 logger = logging.getLogger(__name__)
 
 MINUTES_PER_BLOCK = 60
-MINIMUM_BLOCKS = 6
-MAXIMUM_BLOCKS = 24
+OBSERVATION_BLOCKS = 24
 STATE_VERSION = 1
 
 
@@ -57,7 +56,7 @@ class PublicTrafficRecorder:
         self._minute_routes.setdefault(minute, Counter())[route] += 1
 
     def effective_rates(self) -> dict[str, int]:
-        if len(self._blocks) < MINIMUM_BLOCKS:
+        if len(self._blocks) < OBSERVATION_BLOCKS:
             return dict(self._baseline_rates)
         rates: dict[str, int] = {}
         for block in self._blocks:
@@ -107,7 +106,7 @@ class PublicTrafficRecorder:
                 rates=dict(sorted(self._block_peaks.items())),
             )
         )
-        self._blocks = self._blocks[-MAXIMUM_BLOCKS:]
+        self._blocks = self._blocks[-OBSERVATION_BLOCKS:]
         self._reset_block()
         return True
 
@@ -133,7 +132,7 @@ class PublicTrafficRecorder:
             return []
         try:
             payload = orjson.loads(self._path.read_bytes())
-            return _parse_blocks(payload)[-MAXIMUM_BLOCKS:]
+            return _parse_blocks(payload)[-OBSERVATION_BLOCKS:]
         except (OSError, orjson.JSONDecodeError, TypeError, ValueError):
             logger.warning(
                 "ignoring invalid public traffic state path=%s",

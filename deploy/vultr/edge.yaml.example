@@ -98,7 +98,7 @@ market_ws_url: wss://fstream.binance.com/market/stream
 rest_url: https://fapi.binance.com
 public_connection_shards: 4
 # Observed public WebSocket messages per minute. Runtime observations replace
-# these bootstrap rates after six complete hours.
+# these bootstrap rates after 24 complete hours.
 message_rates:
   1000BONKUSDT: 361
   1000PEPEUSDT: 509

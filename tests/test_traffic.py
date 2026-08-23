@@ -7,7 +7,7 @@ import yaml
 
 from ft_shadow_data_plane.edge.config import EdgeConfig
 from ft_shadow_data_plane.edge.sharding import TrafficSharder
-from ft_shadow_data_plane.edge.traffic import MAXIMUM_BLOCKS, PublicTrafficRecorder
+from ft_shadow_data_plane.edge.traffic import OBSERVATION_BLOCKS, PublicTrafficRecorder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,7 +72,7 @@ def test_traffic_sharder_balances_rates_and_preserves_existing_routes() -> None:
     )
 
 
-def test_observed_rates_require_six_complete_blocks_and_keep_24(tmp_path: Path) -> None:
+def test_observed_rates_require_24_complete_blocks_and_keep_24(tmp_path: Path) -> None:
     clock = FakeClock()
     recorder = PublicTrafficRecorder(
         tmp_path / "public-message-rates.json",
@@ -80,16 +80,16 @@ def test_observed_rates_require_six_complete_blocks_and_keep_24(tmp_path: Path) 
         clock=clock,
     )
 
-    for block in range(5):
+    for block in range(23):
         _record_block(recorder, clock, btc_rate=block + 1, eth_rate=block + 2)
     assert recorder.effective_rates() == {"BTCUSDT": 100, "ETHUSDT": 200}
 
-    _record_block(recorder, clock, btc_rate=6, eth_rate=7)
-    assert recorder.effective_rates() == {"BTCUSDT": 6, "ETHUSDT": 7}
+    _record_block(recorder, clock, btc_rate=24, eth_rate=25)
+    assert recorder.effective_rates() == {"BTCUSDT": 24, "ETHUSDT": 25}
 
-    for block in range(6, 26):
+    for block in range(24, 26):
         _record_block(recorder, clock, btc_rate=block + 1, eth_rate=block + 2)
-    assert len(recorder.blocks) == MAXIMUM_BLOCKS
+    assert len(recorder.blocks) == OBSERVATION_BLOCKS
     assert recorder.blocks[0].start_minute == 121
     assert recorder.effective_rates() == {"BTCUSDT": 26, "ETHUSDT": 27}
 

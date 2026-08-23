@@ -97,8 +97,9 @@ symbol 串行阻塞。实时 source readiness 与约 6 分钟的 universe discov
 
 当前代码把静态路由基准升级为简单的长期流量观测：`message_rates` 表示每币每分钟 public
 WebSocket 消息数，采集器按完整分钟计数、每 60 分钟保存一个峰值块，并只保留最近 24 块。状态少于
-6 个完整块时继续使用配置基准；证据充足后仅在下一次进程启动时采用观测峰值，运行中不迁移已有
-symbol。该状态不改变 50/5/5 身份、raw 或 107 合同，详见
+24 个完整块时继续使用配置基准；证据充足后使用最近 24 小时的观测峰值。动态路由调整必须采用
+add-ready-remove 两阶段交接，不能为了均衡重启采集器或先删除旧订阅。该状态不改变 50/5/5
+身份、raw 或 107 合同，详见
 [public 流量均衡](docs/traffic-balancing.md)。
 
 当前选币的点差指标使用 21 次、1 秒间隔全市场 bookTicker 的 q95，替代少量 depth/bookTicker

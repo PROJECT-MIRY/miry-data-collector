@@ -25,6 +25,7 @@
 | 2026-08-23 | [Binance USD-M 永续市场状态](2026-08-23-market-regime-research.md) | 调研 |
 | 2026-08-23 | [Public WebSocket 4/8 分片 A/B](2026-08-23-public-shard-ab-assessment.md) | 评估 |
 | 2026-08-24 | [NautilusTrader 与 HftBacktest 接入](2026-08-24-backtest-framework-integration-assessment.md) | 评估 |
+| 2026-08-24 | [08-22 之后的数据完整性与分钟策略质量规则](2026-08-24-data-integrity-and-minute-policy-assessment.md) | 评估 |
 
 ## 版本与事故背景
 

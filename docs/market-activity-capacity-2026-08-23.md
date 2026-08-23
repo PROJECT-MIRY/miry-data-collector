@@ -173,6 +173,43 @@ Vultr 在 `10:40:28.709Z` 至 `11:30:29.440Z` 的 50 分钟窗口中：
 将无 ACK 容量目标从当前约 13--19 小时提升到至少 24 小时。WebSocket 分片数测试应以
 `symbol-gap-seconds` 和 CPU 为主指标，不能用成交额变化代替负载测试。
 
+## v0.5.0 当前冲击复核（2026-08-23 17:33 UTC）
+
+最新生产 evaluation
+`/srv/miry-data-rsync/control/universe/evaluations/20260823T172031.956544Z.evaluation.json`
+仍将市场标记为 `ACTIVITY_SHOCK_PENDING`：525 个合约中，quote volume 变化因子为 `2.375`、
+breadth 为 `80.8%`；交易数变化因子为 `2.365`、breadth 为 `79.6%`。它满足广泛性和幅度，
+但只有最近 3 个完整日，尚未满足两个完整 7 日块，因此普通 universe 轮换继续冻结，不能把它声明为
+已确认的新 regime。
+
+v0.5.0 在 `17:17--17:33 UTC` 得到 17 个完整 public minute：
+
+| 指标 | 结果 |
+|---|---:|
+| public 消息/分钟 | P50 `164,310`；P95/峰值 `279,092` |
+| CPU | 平均 `0.509` core；P95/峰值 `0.627` core |
+| ingest events/s | P50 `2,977`；P95/峰值 `4,622` |
+| queue ratio | P50 `1.9%`；P95/峰值 `4.4%` |
+| event-loop lag | P50 `5.6ms`；P95/峰值 `37.7ms` |
+| RSS | P50 `277.7MiB`；峰值 `286.8MiB` |
+| compressed raw | 平均 `150.5KiB/s`；峰值 `236.0KiB/s` |
+
+`17:32 UTC` 的实际 public 峰值为 `279,092/min`，达到旧生产记录 `293,892/min` 的 `95.0%`；
+对应下一次 collector status 为 CPU `0.627` core、queue `0.9%`、event-loop lag `6.2ms`，同一时段
+所有 audit 为 `27--48ms`，open gap、TCP timeout 和 retransmission 均为 0。这证明优化后的
+collector 已经实际承受接近旧记录的分钟峰值，不只是通过微基准。
+
+107 最近 20 轮共验证并 ACK `198,131,392` bytes，实际传输阶段吞吐为 `704.3KiB/s`，同期 raw
+生成速率为 `161.2KiB/s`，约有 `4.37x` 吞吐余量；Vultr 最新
+`ready_manifests_remaining=0`。当前 10GiB spool 上限按平均生成速率约提供 `18.1h` 无 ACK
+缓冲，按观测 raw 峰值约 `12.1h`。若把 8 月 19 日两小时交易数代理的 `1.30--1.36x` 负载差距
+作用于当前峰值，CPU 线性外推约为 `0.82--0.85` core，而无 ACK 缓冲降到约 `8.9--9.3h`；该外推
+不是完整 replay 证明。
+
+因此当前部署已经证明可以处理接近既往生产记录的短时冲击，并且会对网络/sequence 故障显式记 gap；
+但“无 gap 承受 8 月 19 日同级两小时危机”仍未被证明。剩余门禁是 v0.5.0 满 24 小时生产证据、
+保留真实消息结构的 `1.4x` 受限 replay，以及冲击和 107 失联同时发生时至少 24 小时的 spool 容量。
+
 ## 限制
 
 - `number of trades` 是 Binance K 线返回的成交事件计数，不是独立交易者数量。

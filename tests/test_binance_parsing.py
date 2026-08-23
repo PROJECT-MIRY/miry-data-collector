@@ -206,6 +206,68 @@ class RecordingIngest:
         self.events.append(event)
 
 
+class BurstWebSocket:
+    remote_address = ("127.0.0.1", 443)
+    latency = 0.001
+
+    def __init__(self, messages: int, stop: asyncio.Event) -> None:
+        self._messages = messages
+        self._stop = stop
+        self._subscription_id: int | None = None
+        self._received = 0
+        self.payload = orjson.dumps(
+            {
+                "stream": "btcusdt@bookTicker",
+                "data": {"e": "bookTicker", "s": "BTCUSDT"},
+            }
+        )
+
+    async def __aenter__(self) -> BurstWebSocket:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def send(self, value: str) -> None:
+        message = orjson.loads(value)
+        if message["method"] == "SUBSCRIBE":
+            self._subscription_id = int(message["id"])
+
+    async def recv(self, *, decode: bool) -> bytes:
+        assert decode is False
+        if self._received == 0:
+            self._received += 1
+            return orjson.dumps({"result": None, "id": self._subscription_id})
+        self._received += 1
+        if self._received == self._messages + 1:
+            self._stop.set()
+        return self.payload
+
+
+class UpdatingWebSocket:
+    remote_address = ("127.0.0.1", 443)
+    latency = 0.001
+
+    def __init__(self) -> None:
+        self.responses: asyncio.Queue[bytes] = asyncio.Queue()
+        self.sent_methods: list[str] = []
+
+    async def __aenter__(self) -> UpdatingWebSocket:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def send(self, value: str) -> None:
+        message = orjson.loads(value)
+        self.sent_methods.append(str(message["method"]))
+        await self.responses.put(orjson.dumps({"result": None, "id": message["id"]}))
+
+    async def recv(self, *, decode: bool) -> bytes:
+        assert decode is False
+        return await self.responses.get()
+
+
 @pytest.mark.asyncio
 async def test_snapshot_rate_slot_does_not_serialize_slow_http_requests() -> None:
     client = BinanceRestClient(
@@ -613,6 +675,120 @@ def test_source_identity_assigns_sequence_without_async_scheduling() -> None:
 
 
 @pytest.mark.asyncio
+async def test_burst_receive_uses_constant_background_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    websocket = BurstWebSocket(200, stop)
+    ingest = RecordingIngest()
+    monkeypatch.setattr(
+        "miry.collector.websocket.connect",
+        lambda *args, **kwargs: websocket,
+    )
+    real_create_task = asyncio.create_task
+    tasks_created = 0
+
+    def count_task(coro: object, *args: object, **kwargs: object) -> asyncio.Task[object]:
+        nonlocal tasks_created
+        tasks_created += 1
+        return real_create_task(coro, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("miry.collector.websocket.asyncio.create_task", count_task)
+
+    async def ignore_depth_gap(*args: object) -> str:
+        return "gap-depth"
+
+    async def ignore_depth_reanchored(*args: object) -> None:
+        return None
+
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@bookTicker",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=ingest,  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=stop,
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=ignore_depth_gap,
+        on_depth_reanchored=ignore_depth_reanchored,
+        subscription_audit_seconds=60,
+    )
+
+    await connection.run()
+
+    assert len(ingest.events) == 201
+    assert tasks_created <= 12
+
+
+@pytest.mark.asyncio
+async def test_subscription_update_acknowledges_without_stopping_receiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    ready = asyncio.Event()
+    websocket = UpdatingWebSocket()
+    updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue()
+    monkeypatch.setattr(
+        "miry.collector.websocket.connect",
+        lambda *args, **kwargs: websocket,
+    )
+
+    async def ignore_depth_gap(*args: object) -> str:
+        return "gap-depth"
+
+    async def ignore_depth_reanchored(*args: object) -> None:
+        return None
+
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@bookTicker",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=ready,
+        stop=stop,
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=updates,
+        on_depth_gap=ignore_depth_gap,
+        on_depth_reanchored=ignore_depth_reanchored,
+        subscription_audit_seconds=60,
+    )
+    task = asyncio.create_task(connection.run())
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=0.2)
+        loop = asyncio.get_running_loop()
+        acknowledged = loop.create_future()
+        completion = loop.create_future()
+        updates.put_nowait(
+            SubscriptionUpdate(
+                add=("ethusdt@bookTicker",),
+                remove=("btcusdt@bookTicker",),
+                snapshot_requests=(),
+                acknowledged=acknowledged,
+                completion=completion,
+            )
+        )
+        await asyncio.wait_for(completion, timeout=0.2)
+        assert acknowledged.done()
+        assert websocket.sent_methods == ["SUBSCRIBE", "UNSUBSCRIBE", "SUBSCRIBE"]
+    finally:
+        stop.set()
+        await asyncio.wait_for(task, timeout=0.2)
+
+
+@pytest.mark.asyncio
 async def test_websocket_silence_fails_the_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     websocket = StalledWebSocket()
     ingest = RecordingIngest()
@@ -878,6 +1054,9 @@ async def test_subscription_audit_recovers_after_one_missing_response(
     async def ignore_depth_gap(*args: object) -> str:
         return "gap-depth"
 
+    async def ignore_depth_reanchored(*args: object) -> None:
+        return None
+
     connection = BinanceWebSocketConnection(
         url="wss://example.invalid/stream",
         subscriptions=("btcusdt@aggTrade",),
@@ -894,7 +1073,7 @@ async def test_subscription_audit_recovers_after_one_missing_response(
         max_message_bytes=2 * 1024**2,
         updates=asyncio.Queue(),
         on_depth_gap=ignore_depth_gap,
-        on_depth_reanchored=ignore_depth_gap,
+        on_depth_reanchored=ignore_depth_reanchored,
         subscription_audit_seconds=0.01,
         subscription_audit_timeout_seconds=0.01,
         subscription_audit_failures_before_reconnect=3,

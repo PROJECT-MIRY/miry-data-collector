@@ -258,7 +258,11 @@ class Puller:
         self._local_raw_root = local_raw_root
 
     def run(self) -> PullResult:
-        files = self._remote.list_files(self._remote_ready_root)
+        files = tuple(
+            path
+            for path in self._remote.list_files(self._remote_ready_root)
+            if not any(part.startswith(".") for part in PurePosixPath(path).parts)
+        )
         chunk_manifests = [path for path in files if path.endswith(".manifest.json")]
         day_manifests = [path for path in files if path.endswith("/SEALED.json")]
         chunks: list[PulledChunk] = []

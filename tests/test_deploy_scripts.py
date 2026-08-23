@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from miry.contracts.serde import universe_hash
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
+PULL_ONCE = PROJECT_ROOT / "deploy" / "campus-107" / "pull-once.sh"
 SUBMIT_DAY = PROJECT_ROOT / "deploy" / "campus-107" / "submit-day.sh"
 RSYNC_GATEWAY = PROJECT_ROOT / "deploy" / "vultr" / "rsync_gateway.py"
 
@@ -209,6 +211,49 @@ def test_campus_installer_uses_hash_named_release(tmp_path: Path) -> None:
     assert (install_root / "data/transfer-ledger").is_dir()
     assert (install_root / "central.yaml").is_file()
     assert (install_root / "deploy/campus-107/processing.env").is_file()
+
+
+def test_pull_once_serializes_manual_and_scheduled_runs(tmp_path: Path) -> None:
+    fake_apptainer = tmp_path / "apptainer"
+    entered = tmp_path / "entered"
+    starts = tmp_path / "starts"
+    fake_apptainer.write_text(
+        """#!/bin/sh
+set -eu
+printf 'started\\n' >> "$MIRY_TEST_STARTS"
+touch "$MIRY_TEST_ENTERED"
+sleep 1
+""",
+        encoding="ascii",
+    )
+    fake_apptainer.chmod(0o755)
+    environment = {
+        **os.environ,
+        "MIRY_APPTAINER": str(fake_apptainer),
+        "MIRY_CAMPUS_ROOT": str(tmp_path),
+        "MIRY_TEST_ENTERED": str(entered),
+        "MIRY_TEST_STARTS": str(starts),
+    }
+
+    command = ["/bin/sh", str(PULL_ONCE)]
+    first = subprocess.Popen(command, env=environment)
+    try:
+        for _ in range(100):
+            if entered.exists():
+                break
+            time.sleep(0.01)
+        assert entered.exists()
+        second = subprocess.run(
+            command,
+            check=False,
+            env=environment,
+            timeout=2,
+        )
+        assert second.returncode != 0
+    finally:
+        first.wait(timeout=2)
+
+    assert starts.read_text(encoding="ascii").splitlines() == ["started"]
 
 
 def test_submit_day_builds_dependency_chain(tmp_path: Path) -> None:

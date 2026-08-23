@@ -80,6 +80,27 @@ def test_hash_mismatch_never_acknowledges(tmp_path: Path) -> None:
     assert f"control/acks/{manifest.chunk_id}.ack.json" not in remote.writes
 
 
+def test_interrupted_rsync_temporary_manifests_are_ignored(tmp_path: Path) -> None:
+    remote, manifest = _remote_fixture(b"valid parquet stand-in")
+    remote.files = {
+        "ready/date=2026-08-10/writer=depth/.~tmp~/chunk-test.manifest.json": (
+            canonical_json_bytes(manifest)
+        )
+    }
+    puller = Puller(
+        remote,
+        remote_ready_root="ready",
+        remote_ack_root="control/acks",
+        local_raw_root=tmp_path,
+    )
+
+    result = puller.run()
+
+    assert result.new_chunks == 0
+    assert result.failures == ()
+    assert remote.writes == {}
+
+
 def test_manifest_collector_id_cannot_escape_local_raw_root(tmp_path: Path) -> None:
     remote, manifest = _remote_fixture(b"valid parquet stand-in")
     unsafe = manifest.model_copy(update={"collector_id": "../../../escape"})

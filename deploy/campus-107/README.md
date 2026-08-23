@@ -144,8 +144,8 @@ tail -n 20 "/home/scc/pb24000367/Projects/bn/data/transfer-ledger/date=$LEDGER_D
 
 ## 6. 安装 cron
 
-`crontab` 是当前用户的定时任务表。以下任务每分钟尝试一次；`flock -n` 保证上一次未结束时
-不会再启动一个重叠进程。
+`crontab` 是当前用户的定时任务表。以下任务每分钟尝试一次。`pull-once.sh` 内部持有
+`pull.lock`，所以定时任务和手工执行使用同一把锁；上一次未结束时不会再启动重叠进程。
 
 运行 `crontab -e`，加入：
 
@@ -156,7 +156,7 @@ PATH=/usr/local/bin:/usr/bin:/bin
 MAILTO=""
 R=/home/scc/pb24000367/Projects/bn/runtime
 
-* * * * * /usr/bin/flock -n "$R/pull.lock" "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1
+* * * * * "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1
 ```
 
 保存后验证：

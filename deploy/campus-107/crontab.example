@@ -4,4 +4,4 @@ PATH=/usr/local/bin:/usr/bin:/bin
 MAILTO=""
 R=/home/scc/pb24000367/Projects/bn/runtime
 
-* * * * * /usr/bin/flock -n "$R/pull.lock" "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1
+* * * * * "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1

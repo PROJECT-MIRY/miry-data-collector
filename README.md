@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.4.2 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.0 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -144,3 +144,8 @@ v0.4.2 删除 WebSocket 热路径中每条消息一次的 receive task、timeout
 连接固定的 receiver、watchdog、subscription update 和 audit task。100k 真实消息单核回放由
 `1.959s` 降至 `0.449s`；raw、gap、snapshot、universe、rsync/ACK 和 107 合同均不变。诊断与
 验收记录见 [4/8 shard A/B](docs/shard-ab-2026-08-23.md)。
+
+v0.5.0 删除旧部署位置式 CLI 名称：`miry-data-edge`、`miry-data-control` 和
+`miry-data-release` 分别改为 `miry-data-collect`、`miry-data-override` 和 `miry-data-pin`，不保留
+兼容别名。WebSocket 数据面与订阅控制面拆分；CLI 中的日质量判定和 pull 事务编排下沉到 pipeline。
+raw、gap、universe、OCI/SIF 名称及 107 的 pull/process/symbols 命令不变。

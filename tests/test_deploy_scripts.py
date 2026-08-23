@@ -42,12 +42,12 @@ def test_project_and_release_identity_use_miry_name() -> None:
 
     assert project["project"]["name"] == "miry-data-collector"
     assert set(project["project"]["scripts"]) == {
-        "miry-data-edge",
+        "miry-data-collect",
         "miry-data-pull",
         "miry-data-process",
-        "miry-data-control",
+        "miry-data-override",
         "miry-data-select",
-        "miry-data-release",
+        "miry-data-pin",
         "miry-data-retain",
         "miry-data-symbols",
     }

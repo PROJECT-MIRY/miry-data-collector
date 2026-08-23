@@ -17,4 +17,4 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --retries 10 --timeout 300 .
 
 USER 10001:10001
-ENTRYPOINT ["miry-data-edge"]
+ENTRYPOINT ["miry-data-collect"]

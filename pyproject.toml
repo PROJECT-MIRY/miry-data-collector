@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "miry-data-collector"
-version = "0.4.2"
+version = "0.5.0"
 description = "Loss-explicit Binance USD-M market data collection and reconstruction"
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -27,12 +27,12 @@ dev = [
 ]
 
 [project.scripts]
-miry-data-edge = "miry.cli.collect:main"
+miry-data-collect = "miry.cli.collect:main"
 miry-data-pull = "miry.cli.pull:main"
 miry-data-process = "miry.cli.process:main"
-miry-data-control = "miry.cli.control:main"
+miry-data-override = "miry.cli.override:main"
 miry-data-select = "miry.cli.select:main"
-miry-data-release = "miry.cli.release:main"
+miry-data-pin = "miry.cli.pin:main"
 miry-data-retain = "miry.cli.retain:main"
 miry-data-symbols = "miry.cli.symbols:main"
 

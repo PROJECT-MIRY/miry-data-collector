@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from miry.cli.process import _finalize
+from miry.pipeline.quality import finalize_day
 
 
 def test_finalize_rejects_empty_l2_validity(tmp_path: Path) -> None:
@@ -14,7 +14,7 @@ def test_finalize_rejects_empty_l2_validity(tmp_path: Path) -> None:
     symbols = _write_day_outputs(tmp_path, utc_date=utc_date, empty_symbol="BTCUSDT")
 
     with pytest.raises(ValueError, match="empty L2 validity"):
-        _finalize(
+        finalize_day(
             tmp_path,
             collector_id="tokyo01",
             utc_date=utc_date,
@@ -29,7 +29,7 @@ def test_finalize_rejects_negligible_l2_coverage(tmp_path: Path) -> None:
     symbols = _write_day_outputs(tmp_path, utc_date=utc_date, short_symbol="BTCUSDT")
 
     with pytest.raises(ValueError, match="L2 coverage below"):
-        _finalize(
+        finalize_day(
             tmp_path,
             collector_id="tokyo01",
             utc_date=utc_date,
@@ -70,7 +70,7 @@ def test_finalize_records_full_accounted_coverage(tmp_path: Path) -> None:
         encoding="ascii",
     )
 
-    _finalize(
+    finalize_day(
         tmp_path,
         collector_id="tokyo01",
         utc_date=utc_date,
@@ -90,7 +90,7 @@ def test_finalize_rejects_operator_symbol_subset(tmp_path: Path) -> None:
     symbols = _write_day_outputs(tmp_path, utc_date=utc_date)
 
     with pytest.raises(ValueError, match="do not match sealed universe"):
-        _finalize(
+        finalize_day(
             tmp_path,
             collector_id="tokyo01",
             utc_date=utc_date,
@@ -118,7 +118,7 @@ def test_finalize_rejects_validity_that_overlaps_an_explicit_gap(tmp_path: Path)
     )
 
     with pytest.raises(ValueError, match="L2 coverage below"):
-        _finalize(tmp_path, collector_id="tokyo01", utc_date=utc_date, symbols=symbols)
+        finalize_day(tmp_path, collector_id="tokyo01", utc_date=utc_date, symbols=symbols)
 
     rejected = json.loads(
         (tmp_path / "quality/collector=tokyo01/date=2026-08-10/_QUALITY_REJECTED.json").read_text()
@@ -149,7 +149,7 @@ def test_finalize_accepts_the_first_formal_partial_day(tmp_path: Path) -> None:
             encoding="ascii",
         )
 
-    _finalize(tmp_path, collector_id="tokyo01", utc_date=utc_date, symbols=symbols)
+    finalize_day(tmp_path, collector_id="tokyo01", utc_date=utc_date, symbols=symbols)
 
     processed = json.loads(
         (tmp_path / "quality/collector=tokyo01/date=2026-08-10/_PROCESSED.json").read_text()

@@ -30,7 +30,12 @@ spool/ACK GC，以及在线应用已经形成的 universe 决策。内部进一�
 - `membership.py`：持久化 active/pending universe，并在受控边界应用决策。
 
 `pipeline` 在 107 运行，负责 rsync pull、size/SHA-256 校验、ACK、raw 标准化、gap 有效性、L2 重建、
-审计和 retention。它不排名、不生成候选名单，也不改变正式 60 币。
+审计和 retention。`pull.py` 持有完整传输事务，`day.py` 编排单日作业，`quality.py` 持有完成门槛和
+coverage 合同。它不排名、不生成候选名单，也不改变正式 60 币。
+
+`cli` 只解析参数、配置日志并调用一个运行层函数；质量算法、transfer ledger、ACK 状态和业务决策
+不得放回 CLI。正式命令使用动作或精确对象名称：`collect`、`pull`、`process`、`override`、`select`、
+`pin`、`retain` 和 `symbols`。
 
 `universe` 是纯领域层：输入完整 evidence 和当前名单，输出排名、market regime 与下一份名单。它不
 打开 WebSocket、不访问 107 文件系统，也不操作 spool。`models.py` 定义输入、策略与结果，

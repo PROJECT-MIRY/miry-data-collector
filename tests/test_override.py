@@ -8,7 +8,7 @@ import orjson
 import pytest
 from universe_fixtures import formal_roles, liquidity_snapshot
 
-from miry.cli.control import main as control_main
+from miry.cli.override import main as override_main
 from miry.collector.config import UniversePolicyConfig
 from miry.collector.membership import UniverseStore, _next_version
 from miry.contracts.models import UniverseDecision, UniverseDecisionReason
@@ -147,7 +147,7 @@ def test_candidate_override_cli_leaves_version_allocation_to_edge(
         sys,
         "argv",
         [
-            "miry-data-control",
+            "miry-data-override",
             "--effective-at",
             "2099-01-01T00:00:00Z",
             "--boundary-file",
@@ -159,7 +159,7 @@ def test_candidate_override_cli_leaves_version_allocation_to_edge(
         ],
     )
 
-    control_main()
+    override_main()
 
     override = orjson.loads(output_path.read_bytes())
     assert "generation" not in override

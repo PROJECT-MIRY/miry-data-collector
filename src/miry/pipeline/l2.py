@@ -166,6 +166,10 @@ class ConnectionBook:
         self.seen_diffs.add(identity)
         if self.state is not L2State.VALID:
             self.pending.append(diff)
+            if self.anchor_last_update_id is not None and not (
+                diff.first_update_id <= self.anchor_last_update_id <= diff.final_update_id
+            ):
+                return None
             return self._try_bridge()
         if diff.previous_final_update_id != self.previous_update_id:
             self.invalidate()

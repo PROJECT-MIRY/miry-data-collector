@@ -15,6 +15,7 @@ from miry.pipeline.l2 import (
     DepthSnapshot,
     L2DayReconstructor,
     L2State,
+    StateChange,
 )
 
 
@@ -59,6 +60,42 @@ def test_snapshot_bridge_duplicate_gap_and_reanchor() -> None:
     change = book.on_snapshot(DepthSnapshot("a", 5, 500, 103, (("99", "1"),), (("102", "1"),)))
     assert change.state is L2State.VALID
     assert book.previous_update_id == 104
+
+
+def test_unbridged_anchor_does_not_rescan_pending_for_every_new_diff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    book = ConnectionBook(
+        connection_id="a",
+        anchor_last_update_id=100,
+        anchor_received_ns=1,
+    )
+    calls = 0
+    original = ConnectionBook._try_bridge
+
+    def counted(candidate: ConnectionBook) -> StateChange | None:
+        nonlocal calls
+        calls += 1
+        return original(candidate)
+
+    monkeypatch.setattr(ConnectionBook, "_try_bridge", counted)
+    for sequence in range(101, 10_101):
+        book.on_diff(
+            DepthDiff(
+                connection_id="a",
+                receive_seq=sequence,
+                received_ns=sequence,
+                first_update_id=sequence,
+                final_update_id=sequence,
+                previous_final_update_id=sequence - 1,
+                payload_hash=sequence.to_bytes(8, "big"),
+                bids=(),
+                asks=(),
+            )
+        )
+
+    assert calls == 0
+    assert len(book.pending) == 10_000
 
 
 def test_new_anchored_connection_is_explicit_authority_boundary(tmp_path: Path) -> None:

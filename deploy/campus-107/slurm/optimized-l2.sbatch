@@ -12,12 +12,17 @@ set -eu
 : "${MIRY_RANGE_DERIVED_ROOT:?}"
 : "${MIRY_RANGE_COLLECTOR:?}"
 : "${MIRY_RANGE_DATE:?}"
-: "${SLURM_ARRAY_TASK_ID:?}"
 
 marker="$MIRY_RANGE_DERIVED_ROOT/typed/collector=$MIRY_RANGE_COLLECTOR/date=$MIRY_RANGE_DATE/_NORMALIZED.json"
-symbol=$(jq -er --argjson index "$SLURM_ARRAY_TASK_ID" \
-  '.expected_symbols | if type == "array" and length == 60 and (unique | length) == 60 then .[$index] else error("invalid expected_symbols") end' \
-  "$marker")
+if [ -n "${MIRY_RANGE_SYMBOL:-}" ]; then
+  symbol=$MIRY_RANGE_SYMBOL
+else
+  : "${SLURM_ARRAY_TASK_ID:?}"
+  symbol=$(jq -er --argjson index "$SLURM_ARRAY_TASK_ID" \
+    '.expected_symbols | if type == "array" and length == 60 and (unique | length) == 60 then .[$index] else error("invalid expected_symbols") end' \
+    "$marker")
+fi
+test -n "$symbol"
 
 if [ -n "${MIRY_RANGE_L2_RUNNER:-}" ]; then
   : "${MIRY_RANGE_L2_MODE:?}"

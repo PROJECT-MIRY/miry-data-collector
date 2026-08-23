@@ -31,7 +31,7 @@ def main() -> None:
         f"memory {sum(job.memory_gib for job in running):5.1f}/128 GiB  "
         f"running jobs {len(running)}"
     )
-    print("date        track    normalize                 L2          final       active/ETA")
+    print("date        track    normalize                 L2 progress      final       active/ETA")
 
     rows = [*(("legacy", day) for day in range(11, 22)), ("current", 22)]
     for track, day in rows:
@@ -59,7 +59,7 @@ def main() -> None:
             norm_eta = estimate(norm_jobs, completed, total)
 
         l2_done = count_files(quality, "symbol=*/l2-checkpoint.json")
-        l2_text = progress(l2_done, 60)
+        l2_text = l2_progress(l2_done, 60, l2_jobs)
         l2_eta = estimate(l2_jobs, l2_done, 60)
         if (quality / "_PROCESSED.json").is_file():
             final = "processed"
@@ -71,7 +71,7 @@ def main() -> None:
         active = active_stage(norm_jobs, l2_jobs, fin_jobs)
         eta = l2_eta or norm_eta
         suffix = f"{active} {eta}".strip()
-        print(f"{utc_date}  {track:7s}  {norm_text:24s}  {l2_text:10s}  {final:10s}  {suffix}")
+        print(f"{utc_date}  {track:7s}  {norm_text:24s}  {l2_text:15s}  {final:10s}  {suffix}")
 
 
 def load_jobs() -> list[Job]:
@@ -149,6 +149,12 @@ def byte_progress(done: int, total: int) -> str:
     filled = min(width, round(width * done / total))
     gib = 1024**3
     return f"[{'#' * filled}{'.' * (width - filled)}] {done / gib:4.1f}/{total / gib:4.1f}G"
+
+
+def l2_progress(done: int, total: int, jobs: list[Job]) -> str:
+    running = sum(job.state == "RUNNING" for job in jobs)
+    waiting = max(0, total - done - running)
+    return f"{done:02d}/{total:02d} +{running:02d}R {waiting:02d}W"
 
 
 def estimate(jobs: list[Job], done: int, total: int) -> str:

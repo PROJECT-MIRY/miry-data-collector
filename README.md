@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.0 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.1 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -151,3 +151,9 @@ v0.5.0 删除旧部署位置式 CLI 名称：`miry-data-edge`、`miry-data-contr
 `miry-data-release` 分别改为 `miry-data-collect`、`miry-data-override` 和 `miry-data-pin`，不保留
 兼容别名。WebSocket 数据面与订阅控制面拆分；CLI 中的日质量判定和 pull 事务编排下沉到 pipeline。
 raw、gap、universe、OCI/SIF 名称及 107 的 pull/process/symbols 命令不变。
+
+v0.5.1 针对实测秒级成交洪峰，将 raw queue 从 64MiB 扩到 192MiB，writer batch 从
+2,000 events / 2MiB 调整为 8,000 events / 8MiB，并在队列积压时使用无 timeout 分配的直接读取
+fast path。70%/50% 水位只做观测，不阻塞接收；只有 192MiB 最终边界耗尽才产生
+`ingest_overload`。部署新增目标镜像配置 preflight，必须在停止旧 collector 前通过，避免配置
+schema 不匹配造成重启循环。raw schema、gap 语义、universe、ACK 和 107 处理合同不变。

@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.5.0 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.5.1 collector。数据根为
 `/srv/miry-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -73,10 +73,14 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 
 `/etc/miry-data-collector/edge.yaml` 必须使用当前 checkout 的 schema。核对三个角色为 50/5/5、
 `bootstrap_evidence_sha256` 与正式报告一致、`automation_enabled: true`、public shards 为 4，
-queue 为 64MiB。`message_rates` 的单位是每分钟 public WebSocket 消息数，它是冷启动基准，不要求
+queue 为 192MiB。`message_rates` 的单位是每分钟 public WebSocket 消息数，它是冷启动基准，不要求
 与当前 60 币完全相同；没有观测值的新币使用已知速率中位数。旧的 load-weight 配置字段已删除，
 不能与新字段同时保留。长期观测规则见
 [public 流量均衡](../../docs/traffic-balancing.md)。
+
+队列的 70%/50% 水位只用于带滞回的峰值观测，不阻塞接收。192MiB 用于吸收秒级突发，也是防止
+768MiB 容器因持续过载 OOM 的最终硬上限；只有实际耗尽该缓冲才转为显式
+`ingest_overload` gap。writer 使用 8,000 events / 8MiB 批次减少 Arrow/Parquet 调用开销。
 
 在 `/etc/miry-data-collector/edge.env` 中写 immutable digest：
 
@@ -86,17 +90,22 @@ EDGE_DATA_ROOT=/srv/miry-data-rsync
 EDGE_CONFIG=/etc/miry-data-collector/edge.yaml
 ```
 
-拉取并检查架构：
+升级时先安装 deploy 文件；安装器不覆盖现有配置，也不会重启正在运行的 collector。然后拉取镜像、
+检查架构并执行 preflight：
 
 ```bash
+sudo ./deploy/vultr/install.sh
 set -a
 . /etc/miry-data-collector/edge.env
 set +a
 docker pull "$EDGE_IMAGE"
 docker image inspect "$EDGE_IMAGE" --format '{{json .RepoDigests}}'
+sudo /opt/miry-data-collector/deploy/vultr/preflight-upgrade.sh
 ```
 
-Compose 已固定 1.00 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
+preflight 使用目标镜像以无网络、只读方式加载当前 edge YAML；它不会挂载数据目录，也不会启动
+collector。必须在停止旧服务前通过，防止新 schema 与旧配置不兼容造成重启循环。Compose 已固定
+1.00 CPU、768MiB RAM、256 PIDs、只读 rootfs 和日志轮换。
 
 ## 5. 保留状态上线
 
@@ -112,10 +121,9 @@ sudo jq '{core_generation,candidate_revision,decision_sequence,
   /srv/miry-data-rsync/control/universe/active.json
 ```
 
-安装 deploy 文件后，不要用示例覆盖现有 50/5/5 名单、版本号、bootstrap hash 和 universe 状态：
+不要用示例覆盖现有 50/5/5 名单、版本号、bootstrap hash 和 universe 状态：
 
 ```bash
-sudo ./deploy/vultr/install.sh
 sudoedit /etc/miry-data-collector/edge.yaml
 ```
 
@@ -123,8 +131,8 @@ sudoedit /etc/miry-data-collector/edge.yaml
 `market_context_change_ratio: 1.25`、`market_context_breadth_ratio: 0.70`、
 `market_context_minimum_instruments: 60`、`depth_mature_candidate_count: 200` 和
 `mature_pool_warning_size: 65`。edge 配置还必须包含 `snapshot_request_interval_seconds: 0.75` 和
-`snapshot_request_concurrency: 4`，以及 `open_interest_startup_spread_seconds: 5`。Pydantic 拒绝
-未知字段，因此旧选择器字段必须删除干净。
+`snapshot_request_concurrency: 4`、`open_interest_startup_spread_seconds: 5`，以及
+`liquidity_book_ticker_samples: 21`。Pydantic 拒绝未知字段，因此旧选择器字段必须删除干净。
 
 ## 6. 验证和启动
 
@@ -217,9 +225,10 @@ sudo find /srv/miry-data-rsync/control/open-gaps -type f -maxdepth 1 -print
 ## 8. 24 小时性能验收
 
 每分钟 collector status 日志包含 RSS、Arrow bytes、CPU time、steal、event-loop lag、queue
-ratio、writer idle 和 finalize 时间。按照 [实施合同](../../docs/collection-contract.md) 计算
-p95/p99。若 OOM、RSS 峰值超过 700MiB、CPU p95 超过 80%、queue 连续过高、磁盘低于 2GiB
-或出现性能 gap，不得通过减少 60 币或降低频率规避；应先停止并扩容或优化。
+ratio/high-water、各 writer group 队列字节数、warning 水位穿越/硬拒绝、writer idle 和 finalize
+时间。按照 [实施合同](../../docs/collection-contract.md) 计算 p95/p99。若 OOM、RSS 峰值超过
+700MiB、CPU p95 超过 80%、queue 连续过高、磁盘低于 2GiB 或出现性能 gap，不得通过减少
+60 币或降低频率规避；应先停止并扩容或优化。
 
 ## 9. 升级原则
 

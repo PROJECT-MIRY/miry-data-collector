@@ -408,17 +408,29 @@ class CollectorService:
                     WriterGroup.METADATA,
                 )
             }
+            queue_by_group = self._queues.used_bytes_by_group
+            queue_interval_high_water = self._queues.take_interval_high_water_bytes()
             event_loop_lag = max(0.0, elapsed - 60.0) if previous_tick else 0.0
             self._previous_written_bytes = writer.compressed_bytes
             previous_tick = now
             logger.info(
-                "collector status queue_bytes=%d queue_ratio=%.3f spool_bytes=%d "
+                "collector status queue_bytes=%d queue_ratio=%.3f queue_high_water_bytes=%d "
+                "queue_interval_high_water_bytes=%d queue_warn_crossings=%d "
+                "queue_hard_rejections=%d depth_queue_bytes=%d "
+                "trades_market_queue_bytes=%d metadata_queue_bytes=%d spool_bytes=%d "
                 "free_bytes=%d rss_bytes=%d arrow_bytes=%d cpu_user_s=%.3f cpu_system_s=%.3f "
                 "cpu_steal_ratio=%.4f event_loop_lag_s=%.6f chunks=%d events=%d "
                 "compressed_bytes=%d write_bytes_s=%.1f max_finalize_s=%.6f "
                 "depth_idle_s=%.3f trades_market_idle_s=%.3f metadata_idle_s=%.3f",
                 self._queues.used_bytes,
                 self._queues.utilization,
+                self._queues.high_water_bytes,
+                queue_interval_high_water,
+                self._queues.warn_crossings,
+                self._queues.hard_rejections,
+                queue_by_group[WriterGroup.DEPTH],
+                queue_by_group[WriterGroup.TRADES_MARKET],
+                queue_by_group[WriterGroup.METADATA],
                 status.used_bytes,
                 status.free_bytes,
                 _current_rss_bytes(),

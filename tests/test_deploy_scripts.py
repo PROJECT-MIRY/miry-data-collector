@@ -21,6 +21,9 @@ INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
 PULL_ONCE = PROJECT_ROOT / "deploy" / "campus-107" / "pull-once.sh"
 SUBMIT_DAY = PROJECT_ROOT / "deploy" / "campus-107" / "submit-day.sh"
 RSYNC_GATEWAY = PROJECT_ROOT / "deploy" / "vultr" / "rsync_gateway.py"
+VULTR_INSTALL = PROJECT_ROOT / "deploy" / "vultr" / "install.sh"
+VULTR_PREFLIGHT = PROJECT_ROOT / "deploy" / "vultr" / "preflight-upgrade.sh"
+VULTR_VERIFY = PROJECT_ROOT / "deploy" / "vultr" / "verify.sh"
 
 
 def _load_rsync_gateway():
@@ -131,7 +134,9 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     )
     assert single_route_snapshot_wait <= 13
     assert cold_start_snapshot_wait <= 45
-    assert config.queue_max_bytes == 64 * 1024**2
+    assert config.queue_max_bytes == 192 * 1024**2
+    assert config.queue_warn_ratio == 0.70
+    assert config.queue_resume_ratio == 0.50
     assert config.minimum_free_bytes == 2 * 1024**3
     assert config.websocket_max_queue == 16
     assert config.mark_price_liveness_seconds == 15
@@ -141,7 +146,8 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert config.snapshot_request_interval_seconds == 0.75
     assert config.snapshot_request_concurrency == 4
     assert config.open_interest_startup_spread_seconds == 5
-    assert config.writer_batch_bytes == 2 * 1024**2
+    assert config.writer_batch_events == 8_000
+    assert config.writer_batch_bytes == 8 * 1024**2
     assert "mem_limit: 768m" in compose
     assert "cpus: 1.00" in compose
     assert "pids_limit: 256" in compose
@@ -149,6 +155,20 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     assert "SuccessExitStatus=130" in service
     assert "diagnostics.py" in diagnostics_service
     assert "OnUnitActiveSec=30s" in diagnostics_timer
+
+
+def test_vultr_upgrade_preflight_validates_config_before_restart() -> None:
+    preflight = VULTR_PREFLIGHT.read_text(encoding="ascii")
+    installer = VULTR_INSTALL.read_text(encoding="ascii")
+    verifier = VULTR_VERIFY.read_text(encoding="ascii")
+
+    assert "--network none" in preflight
+    assert "--read-only" in preflight
+    assert "load_collector_config" in preflight
+    assert "EDGE_IMAGE must use an immutable sha256 digest" in preflight
+    assert "EDGE_DATA_ROOT" not in preflight
+    assert "preflight-upgrade.sh" in installer
+    assert "preflight-upgrade.sh" in verifier
 
 
 @pytest.mark.parametrize(

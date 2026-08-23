@@ -284,7 +284,7 @@ class WriterPool:
                 return
             released = await asyncio.to_thread(session.flush)
             if released:
-                await self._queues.release(released)
+                await self._queues.release(group, released)
 
         async def finish() -> None:
             nonlocal session
@@ -307,11 +307,14 @@ class WriterPool:
 
         while True:
             try:
-                item = await asyncio.wait_for(self._queues.get(group), timeout=1.0)
-            except TimeoutError:
-                if session is not None and session.elapsed() >= self._limits.max_seconds:
-                    await finish()
-                continue
+                item = self._queues.get_nowait(group)
+            except asyncio.QueueEmpty:
+                try:
+                    item = await asyncio.wait_for(self._queues.get(group), timeout=1.0)
+                except TimeoutError:
+                    if session is not None and session.elapsed() >= self._limits.max_seconds:
+                        await finish()
+                    continue
 
             if isinstance(item, QueuedEvent):
                 event_date = datetime.fromtimestamp(

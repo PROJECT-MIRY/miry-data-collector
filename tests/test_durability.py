@@ -105,6 +105,40 @@ async def test_queue_hard_limit_rejects_without_silent_eviction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_queue_warning_watermark_observes_without_blocking_admission() -> None:
+    queues = ByteBoundedQueues(2_000, warn_ratio=0.7, resume_ratio=0.5)
+    reservation = _event(1, b"x" * 100).approximate_size_bytes
+
+    for sequence in range(1, 6):
+        await queues.put(_event(sequence, b"x" * 100))
+
+    assert queues.used_bytes == 5 * reservation
+    assert queues.used_bytes > queues.warn_bytes
+    assert queues.warn_crossings == 1
+    assert queues.hard_rejections == 0
+    assert queues.used_bytes_by_group[WriterGroup.TRADES_MARKET] == 5 * reservation
+    assert queues.high_water_bytes == 5 * reservation
+    assert queues.take_interval_high_water_bytes() == 5 * reservation
+
+    with pytest.raises(QueueOverloaded, match="hard limit"):
+        await queues.put(_event(6, b"x" * 100))
+
+    assert queues.used_bytes == 5 * reservation
+    assert queues.hard_rejections == 1
+
+    await queues.release(WriterGroup.TRADES_MARKET, 3 * reservation)
+    for sequence in range(7, 10):
+        await queues.put(_event(sequence, b"x" * 100))
+
+    assert queues.warn_crossings == 2
+    assert queues.take_interval_high_water_bytes() == 5 * reservation
+
+    await queues.release(WriterGroup.TRADES_MARKET, 5 * reservation)
+    assert queues.used_bytes == 0
+    assert all(used_bytes == 0 for used_bytes in queues.used_bytes_by_group.values())
+
+
+@pytest.mark.asyncio
 async def test_queue_tracks_activity_per_writer_group(monkeypatch: pytest.MonkeyPatch) -> None:
     queues = ByteBoundedQueues(2_000, warn_ratio=0.7, resume_ratio=0.5)
     monkeypatch.setattr("miry.collector.queue.time.monotonic", lambda: 100.0)

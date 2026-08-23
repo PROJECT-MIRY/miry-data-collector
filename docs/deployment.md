@@ -1,4 +1,4 @@
-# v0.5.0 端到端部署指南
+# v0.5.1 端到端部署指南
 
 正式链路为：
 
@@ -28,13 +28,13 @@ Binance -> Vultr collector -> /srv/miry-data-rsync/ready
 3. 安装并校验 release SIF，更新 `MIRY_*` processing 环境与 SSH 路径；
 4. 运行一次前台 pull，确认 `state=ok`、`failures=0`、`acks_pushed=acks_queued`；
 5. 在 Vultr 记录 universe、formal-start、open gap、ready、writing、ACK 和磁盘基线；
-6. 停止 collector，将现有完整数据树放在 `/srv/miry-data-rsync`；
-7. 安装 `/opt/miry-data-collector`、`/etc/miry-data-collector`、受限 rsync gateway 和
-   `miry-data-collector.service`；
-8. 写入 release 的 immutable OCI digest，只启动一次 collector；
-9. 等待全部 realtime source ready 和受控 stop gap 关闭，再恢复 107 cron；
-10. 启用 `miry-data-diagnostics.timer`，验证首条宿主机诊断 JSONL 无错误；
-11. 验证 ACK/REMOTE_GC、raw 增长、transfer status、资源指标和 open gap。
+6. 旧 collector 保持运行，安装 deploy 文件；安装器不得覆盖现有 edge 配置或触发重启；
+7. 拉取目标 immutable OCI image，并执行 `preflight-upgrade.sh`；
+8. preflight 通过后停止 collector，将现有完整数据树放在 `/srv/miry-data-rsync`；
+9. 写入 release 的 immutable OCI digest，只启动一次 collector；
+10. 等待全部 realtime source ready 和受控 stop gap 关闭，再恢复 107 cron；
+11. 启用 `miry-data-diagnostics.timer`，验证首条宿主机诊断 JSONL 无错误；
+12. 验证 ACK/REMOTE_GC、raw 增长、transfer status、资源指标和 open gap。
 
 ## 验收
 

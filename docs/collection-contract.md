@@ -1,4 +1,4 @@
-# v0.5.0 正式采集与处理合同
+# v0.5.1 正式采集与处理合同
 
 ## 本阶段目标
 
@@ -149,8 +149,8 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
   request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；
 - OI 稳态仍为每币 30 秒，启动首轮只在 5 秒窗口内确定性错峰；realtime readiness 不等待完整
   universe discovery；
-- raw queue 总字节上限 64MiB，70% 告警，50% 恢复；
-- writer batch 上限 2000 events 或 2MiB；
+- raw queue 总字节上限 192MiB；70%/50% 是只观测、不阻塞接收的告警滞回水位；
+- writer batch 上限 8,000 events 或 8MiB；
 - RSS p95 不超过 600MiB，峰值不超过 700MiB，无 OOM；
 - CPU 平均不超过 65%，p95 不超过 80%；
 - event-loop lag p99 小于 100ms；

@@ -76,6 +76,10 @@ if [ ! -x "$deploy_root/diagnostics.py" ]; then
     echo "host diagnostics sampler is not installed" >&2
     exit 1
 fi
+if [ ! -x "$deploy_root/preflight-upgrade.sh" ]; then
+    echo "collector upgrade preflight is not installed" >&2
+    exit 1
+fi
 
 docker compose -f "$deploy_root/compose.yaml" config --quiet
 sshd -t

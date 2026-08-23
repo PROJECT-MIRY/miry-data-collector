@@ -1,26 +1,26 @@
 #!/bin/sh
-#SBATCH --job-name=ft-l2
+#SBATCH --job-name=miry-l2
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=04:00:00
 #SBATCH --mail-type=FAIL
 
 set -eu
-: "${FT_APPTAINER:?}"
-: "${FT_DATA_IMAGE:?}"
-: "${FT_RAW_ROOT:?}"
-: "${FT_DERIVED_ROOT:?}"
-: "${FT_COLLECTOR:?}"
-: "${FT_UTC_DATE:?}"
-: "${FT_SYMBOLS_FILE:?}"
+: "${MIRY_APPTAINER:?}"
+: "${MIRY_DATA_IMAGE:?}"
+: "${MIRY_RAW_ROOT:?}"
+: "${MIRY_DERIVED_ROOT:?}"
+: "${MIRY_COLLECTOR:?}"
+: "${MIRY_UTC_DATE:?}"
+: "${MIRY_SYMBOLS_FILE:?}"
 : "${SLURM_ARRAY_TASK_ID:?}"
 
-symbol=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$FT_SYMBOLS_FILE")
+symbol=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" "$MIRY_SYMBOLS_FILE")
 test -n "$symbol"
 
-"$FT_APPTAINER" exec --writable "$FT_DATA_IMAGE" ft-data-process l2 \
-  --raw-root "$FT_RAW_ROOT" \
-  --derived-root "$FT_DERIVED_ROOT" \
-  --collector "$FT_COLLECTOR" \
-  --date "$FT_UTC_DATE" \
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-process l2 \
+  --raw-root "$MIRY_RAW_ROOT" \
+  --derived-root "$MIRY_DERIVED_ROOT" \
+  --collector "$MIRY_COLLECTOR" \
+  --date "$MIRY_UTC_DATE" \
   --symbol "$symbol"

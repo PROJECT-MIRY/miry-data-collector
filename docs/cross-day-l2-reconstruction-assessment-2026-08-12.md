@@ -83,7 +83,7 @@ chunk 的最小/最大接收时间均落在目标日范围内：
 L2 CLI 只接受一个 `--date`，并仅把该日期传给 reconstructor：
 [central/process_cli.py L16-L28](../src/miry/cli/process.py)、
 [central/process_cli.py L51-L58](../src/miry/cli/process.py)。Slurm array 同样只传
-`FT_UTC_DATE`，没有前一日 checkpoint 或依赖参数：
+`MIRY_UTC_DATE`，没有前一日 checkpoint 或依赖参数：
 [l2-array.sbatch L8-L26](../deploy/campus-107/slurm/l2-array.sbatch#L8-L26)。
 
 ### 5. 新日 reconstructor 必须看到当日 snapshot 才能进入 VALID

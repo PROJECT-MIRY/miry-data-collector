@@ -2,8 +2,8 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-processing_env=${FT_PROCESSING_ENV:-$script_dir/processing.env}
-install_root=${FT_CAMPUS_ROOT:-/persistent/ft-shadow-data-plane}
+processing_env=${MIRY_PROCESSING_ENV:-$script_dir/processing.env}
+install_root=${MIRY_CAMPUS_ROOT:-/persistent/miry-data-collector}
 
 for command_name in sbatch flock ssh; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -22,37 +22,37 @@ done
 set -a
 . "$processing_env"
 set +a
-: "${FT_APPTAINER:?FT_APPTAINER is required}"
-: "${FT_DATA_IMAGE:?FT_DATA_IMAGE is required}"
-: "${FT_RAW_ROOT:?FT_RAW_ROOT is required}"
-: "${FT_DERIVED_ROOT:?FT_DERIVED_ROOT is required}"
-: "${FT_COLLECTOR:?FT_COLLECTOR is required}"
-: "${FT_L2_CONCURRENCY:?FT_L2_CONCURRENCY is required}"
+: "${MIRY_APPTAINER:?MIRY_APPTAINER is required}"
+: "${MIRY_DATA_IMAGE:?MIRY_DATA_IMAGE is required}"
+: "${MIRY_RAW_ROOT:?MIRY_RAW_ROOT is required}"
+: "${MIRY_DERIVED_ROOT:?MIRY_DERIVED_ROOT is required}"
+: "${MIRY_COLLECTOR:?MIRY_COLLECTOR is required}"
+: "${MIRY_L2_CONCURRENCY:?MIRY_L2_CONCURRENCY is required}"
 
-if [ ! -x "$FT_APPTAINER" ]; then
-    echo "missing executable Apptainer: $FT_APPTAINER" >&2
+if [ ! -x "$MIRY_APPTAINER" ]; then
+    echo "missing executable Apptainer: $MIRY_APPTAINER" >&2
     exit 1
 fi
-if [ ! -d "$FT_DATA_IMAGE" ]; then
-    echo "missing Apptainer sandbox: $FT_DATA_IMAGE" >&2
+if [ ! -d "$MIRY_DATA_IMAGE" ]; then
+    echo "missing Apptainer sandbox: $MIRY_DATA_IMAGE" >&2
     exit 1
 fi
-for path in "$FT_RAW_ROOT" "$FT_DERIVED_ROOT"; do
+for path in "$MIRY_RAW_ROOT" "$MIRY_DERIVED_ROOT"; do
     if [ ! -d "$path" ] || [ ! -w "$path" ]; then
         echo "directory must exist and be writable: $path" >&2
         exit 1
     fi
 done
 
-case "$FT_L2_CONCURRENCY" in
+case "$MIRY_L2_CONCURRENCY" in
     *[!0-9]*|0|'')
-        echo "FT_L2_CONCURRENCY must be a positive integer" >&2
+        echo "MIRY_L2_CONCURRENCY must be a positive integer" >&2
         exit 1
         ;;
 esac
 
-"$FT_APPTAINER" exec --writable "$FT_DATA_IMAGE" ft-data-pull --help >/dev/null
-"$FT_APPTAINER" exec --writable "$FT_DATA_IMAGE" ft-data-process --help >/dev/null
-"$FT_APPTAINER" exec --writable "$FT_DATA_IMAGE" rsync --version >/dev/null
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-pull --help >/dev/null
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-process --help >/dev/null
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" rsync --version >/dev/null
 sbatch --version
 echo "campus-107 deployment checks passed"

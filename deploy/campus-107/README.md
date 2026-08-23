@@ -24,147 +24,89 @@ command -v crontab flock sbatch ssh
 ```
 
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
-`~/.ssh/ft-data-puller` 私钥。
+`~/.ssh/miry-data-puller` 私钥。
 
-v0.3.8 只支持当前结构化 universe 合同，不解析旧 generation。旧 raw 保持原始字节和日期分区，
-不删除、不改写；旧 runtime/derived 移入 `data/archive/legacy-contract-*`。新 runtime/derived 从空路径
-部署，并只处理新 formal-start 之后的日期。
+## 2. 保留状态安装 v0.4.0
 
-## 2. 归档旧实验并 clean start
-
-先在 Vultr 停止 collector，使 `writing` 完成封口。然后在 107 备份 crontab，并从
-`crontab -e` 删除旧 pull 行：
-
-```bash
-BASE=/home/scc/pb24000367/Projects/bn
-crontab -l > "$BASE/crontab.pre-v0.3.5"
-crontab -e
-pgrep -af ft-data-pull || true
-```
-
-等待现有 pull 退出后，手工运行旧 `pull-once.sh`，直到连续一次出现
-`pull complete new_chunks=0 failures=0`。这一步必须在归档前完成，不能只看本地文件大小。
-
-从 Vultr 导出的旧 control/evidence/gap tar 传到 107 后，为旧 runtime 创建时间戳 archive。以下
-操作不移动旧 raw，只记录其 immutable inventory；runtime/derived 使用同一文件系统 rename：
-
-```bash
-BASE=/home/scc/pb24000367/Projects/bn
-ARCHIVE="$BASE/data/archive/pre-v0.3.5-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$ARCHIVE"
-
-find "$BASE/data/raw" -type f -printf '%s\n' | awk \
-  '{files += 1; bytes += $1} END {printf "raw_files=%d raw_bytes=%.0f\n", files, bytes}' \
-  > "$ARCHIVE/inventory.txt"
-find "$BASE/data/raw" -type f -path '*/date=*/*' -printf '%p\n' \
-  | sed -n 's#.*date=\([^/]*\)/.*#\1#p' | sort -u \
-  >> "$ARCHIVE/inventory.txt"
-
-mv "$BASE/data/derived" "$ARCHIVE/derived"
-mv "$BASE/runtime" "$ARCHIVE/runtime"
-```
-
-把 `vultr-pre-v0.3.5-control.tar.gz` 及其 SHA-256 文件放入同一 `$ARCHIVE`，执行
-`sha256sum --check`。再记录 release、文件数、字节数和日期范围，最后将 archive 设为只读：
-
-```bash
-(cd "$ARCHIVE" && sha256sum --check vultr-pre-v0.3.5-control.tar.gz.sha256)
-chmod -R a-w "$ARCHIVE"
-mkdir -p "$BASE/data/derived"
-```
-
-新代码不扫描 `$BASE/data/archive`。旧日期仍在 `$BASE/data/raw`，需要旧版离线环境时使用 archive
-中的 runtime；不得把旧 control 状态链接回新的 runtime。新旧实验以 formal-start 时间边界区分。
-
-## 3. 校验并安装 v0.3.8
-
-```bash
-cd /home/scc/pb24000367/Projects/bn/miry-data-collector
-sha256sum --check miry-data-collector.sif.sha256
-
-FT_CAMPUS_ROOT=/home/scc/pb24000367/Projects/bn/runtime \
-FT_DATA_ROOT=/home/scc/pb24000367/Projects/bn/data \
-FT_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
-  ./deploy/campus-107/install.sh ./miry-data-collector.sif
-```
+升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
+ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
+sandbox 符号链接并更新部署脚本。
 
 安装器创建 hash-named SIF 和 sandbox，并令
-`runtime/ft-shadow-data-plane.sandbox` 指向当前版本。构建约占 306MiB，只在新 hash 首次安装
+`runtime/miry-data-collector.sandbox` 指向当前版本。构建约占 306MiB，只在新 hash 首次安装
 时执行。`runtime/pull-once.sh` 安装为可执行文件。
-
-归档后旧 runtime 已经不存在，并且 cron 尚未恢复，因此直接安装，不要对不存在的旧
-`runtime/pull.lock` 加锁：
 
 ```bash
 BASE=/home/scc/pb24000367/Projects/bn
 cd "$BASE/miry-data-collector"
 sha256sum --check miry-data-collector.sif.sha256
 
-FT_CAMPUS_ROOT="$BASE/runtime" \
-FT_DATA_ROOT="$BASE/data" \
-FT_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
+MIRY_CAMPUS_ROOT="$BASE/runtime" \
+MIRY_DATA_ROOT="$BASE/data" \
+MIRY_APPTAINER=/public/app/apptainer/1.4.5/bin/apptainer \
   ./deploy/campus-107/install.sh ./miry-data-collector.sif
 
-FT_CAMPUS_ROOT="$BASE/runtime" \
+install -m 600 deploy/campus-107/processing.env.example \
+  "$BASE/runtime/deploy/campus-107/processing.env"
+
+MIRY_CAMPUS_ROOT="$BASE/runtime" \
   "$BASE/runtime/deploy/campus-107/verify.sh"
 "$BASE/runtime/pull-once.sh"
 ```
 
-详细归档、停 cron 和恢复顺序见
-[`v0.3.5` clean start](../../docs/v0.3.5-structured-universe-clean-start.md)。安装完成后重新安装 cron，
-不得复用 archive 中的 runtime 配置或 sandbox。
+前台 pull 必须出现 `failures=0`，之后才恢复原 cron。不要移动、归档或清空 `data/`。
 
-## 4. SSH host key 与 rsync
+## 3. SSH host key 与 rsync
 
 `known_hosts` 必须只接受通过独立渠道从 Vultr 管理员取得的 ED25519 指纹。第一次可执行：
 
 ```bash
 ssh-keyscan -p 22 -t ed25519 167.179.115.243 \
-  > /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts.new
+  > /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts.new
 ssh-keygen -lf \
-  /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts.new
+  /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts.new
 ```
 
 指纹完全匹配后再替换正式文件：
 
 ```bash
-mv /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts.new \
-  /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts
-chmod 600 /home/scc/pb24000367/.ssh/ft-data-puller \
-  /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts
+mv /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts.new \
+  /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
+chmod 600 /home/scc/pb24000367/.ssh/miry-data-puller \
+  /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
 ```
 
 通过 sandbox 验证受限 rsync 只读列表：
 
 ```bash
 /public/app/apptainer/1.4.5/bin/apptainer exec --writable \
-  /home/scc/pb24000367/Projects/bn/runtime/ft-shadow-data-plane.sandbox \
+  /home/scc/pb24000367/Projects/bn/runtime/miry-data-collector.sandbox \
   rsync --list-only \
-  -e 'ssh -p 22 -i /home/scc/pb24000367/.ssh/ft-data-puller -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts' \
+  -e 'ssh -p 22 -i /home/scc/pb24000367/.ssh/miry-data-puller -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/home/scc/pb24000367/.ssh/miry-data-collector.known_hosts' \
   data-puller@167.179.115.243:ready/
 ```
 
 这里不应出现 shell prompt；远端 key 只允许 rrsync 协议。
 
-## 5. 配置文件
+## 4. 配置文件
 
-clean install 已生成 `runtime/central.yaml`。内容应与
+安装器只在文件不存在时生成 `runtime/central.yaml`。内容应与
 `deploy/campus-107/central.yaml.example` 一致，尤其核对：
 
 ```yaml
 local_raw_root: /home/scc/pb24000367/Projects/bn/data/raw
 local_staging_root: /home/scc/pb24000367/Projects/bn/runtime/rsync
-client_key: /home/scc/pb24000367/.ssh/ft-data-puller
-known_hosts: /home/scc/pb24000367/.ssh/ft-shadow-data-plane.known_hosts
+client_key: /home/scc/pb24000367/.ssh/miry-data-puller
+known_hosts: /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
 ```
 
 `runtime/deploy/campus-107/processing.env` 应使用绝对 Apptainer 路径、writable sandbox、上述
 raw/derived 和 `tokyo01`。赋值两侧不能有空格，含空格的值必须加引号。
 
-## 6. 前台验证和第一次拉取
+## 5. 前台验证和第一次拉取
 
 ```bash
-FT_CAMPUS_ROOT=/home/scc/pb24000367/Projects/bn/runtime \
+MIRY_CAMPUS_ROOT=/home/scc/pb24000367/Projects/bn/runtime \
   /home/scc/pb24000367/Projects/bn/runtime/deploy/campus-107/verify.sh
 
 /home/scc/pb24000367/Projects/bn/runtime/pull-once.sh
@@ -200,7 +142,7 @@ tail -n 20 "/home/scc/pb24000367/Projects/bn/data/transfer-ledger/date=$LEDGER_D
 在 Vultr 看到对应 `REMOTE_GC`。完整语义见
 [ACK 传输审计合同](../../docs/transfer-ack-observability.md)。
 
-## 7. 安装 cron
+## 6. 安装 cron
 
 `crontab` 是当前用户的定时任务表。以下任务每分钟尝试一次；`flock -n` 保证上一次未结束时
 不会再启动一个重叠进程。
@@ -223,14 +165,14 @@ R=/home/scc/pb24000367/Projects/bn/runtime
 crontab -l | nl -ba
 sleep 70
 tail -n 50 /home/scc/pb24000367/Projects/bn/runtime/logs/pull.log
-pgrep -af ft-data-pull || true
+pgrep -af miry-data-pull || true
 du -sh /home/scc/pb24000367/Projects/bn/data/raw
 ```
 
 短时任务通常在检查时已经退出，所以 `pgrep` 没有输出不代表失败；以日志、raw 文件增长和
 Vultr ACK 为准。
 
-## 8. Slurm 处理
+## 7. Slurm 处理
 
 当某天的 `SEALED.json` 和其引用的全部 chunk 已拉取后，准备当天 60 币文件，每行一个大写
 symbol，然后提交：
@@ -261,9 +203,9 @@ jq '{core_generation,candidate_revision,decision_sequence,universe_version,
   /home/scc/pb24000367/Projects/bn/data/derived/quality/collector=tokyo01/date=2026-08-12/_PROCESSED.json
 ```
 
-## 9. 常见故障
+## 8. 常见故障
 
-- `Permission denied (publickey)`：确认私钥名是 `ft-data-puller`，Vultr 已重新运行
+- `Permission denied (publickey)`：确认私钥名是 `miry-data-puller`，Vultr 已重新运行
   `configure-rsync.sh`，并且命令含 `IdentitiesOnly=yes`；
 - host key 报错：不要关闭检查，重新从管理员渠道核对指纹；
 - `rrsync` 拒绝命令：Vultr 仍有旧 SSH Match 配置，或客户端使用了服务端删除/覆盖参数；

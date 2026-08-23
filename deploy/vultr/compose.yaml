@@ -1,16 +1,16 @@
-name: ft-shadow-data-plane
+name: miry-data-collector
 
 services:
   collector:
     image: ${EDGE_IMAGE:?EDGE_IMAGE must be an immutable image digest}
-    command: ["--config", "/etc/ft-data/edge.yaml"]
+    command: ["--config", "/etc/miry-data/edge.yaml"]
     user: "10001:10001"
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777
     volumes:
-      - ${EDGE_DATA_ROOT:-/srv/ft-data-rsync}:/data
-      - ${EDGE_CONFIG:-/etc/ft-shadow-data-plane/edge.yaml}:/etc/ft-data/edge.yaml:ro
+      - ${EDGE_DATA_ROOT:-/srv/miry-data-rsync}:/data
+      - ${EDGE_CONFIG:-/etc/miry-data-collector/edge.yaml}:/etc/miry-data/edge.yaml:ro
     cap_drop: ["ALL"]
     security_opt:
       - no-new-privileges:true

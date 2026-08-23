@@ -186,7 +186,7 @@ def test_pull_cli_persists_success_status_and_transfer_ledger(
     )
     monkeypatch.setattr(RsyncTransport, "pull_ready", lambda _self: None)
     monkeypatch.setattr(RsyncTransport, "_run", lambda _self, *_arguments: None)
-    monkeypatch.setattr(sys, "argv", ["ft-data-pull", "--config", "unused.yaml"])
+    monkeypatch.setattr(sys, "argv", ["miry-data-pull", "--config", "unused.yaml"])
 
     pull_main()
 
@@ -223,7 +223,7 @@ def test_pull_cli_persists_failure_status_and_keeps_staged_ack(
         raise OSError("simulated ACK upload failure")
 
     monkeypatch.setattr(RsyncTransport, "_run", fail_rsync)
-    monkeypatch.setattr(sys, "argv", ["ft-data-pull", "--config", "unused.yaml"])
+    monkeypatch.setattr(sys, "argv", ["miry-data-pull", "--config", "unused.yaml"])
 
     with pytest.raises(OSError, match="simulated ACK upload failure"):
         pull_main()

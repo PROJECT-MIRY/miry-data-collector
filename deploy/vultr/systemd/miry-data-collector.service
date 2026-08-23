@@ -1,16 +1,16 @@
 [Unit]
-Description=ft-shadow Binance USD-M edge collector
+Description=miry Binance USD-M data collector
 Requires=docker.service
 After=docker.service network-online.target time-sync.target
 Wants=network-online.target time-sync.target
-OnFailure=ft-shadow-data-plane-alert@%n.service
+OnFailure=miry-data-collector-alert@%n.service
 StartLimitIntervalSec=600
 StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/ft-shadow-data-plane/edge.env
-WorkingDirectory=/opt/ft-shadow-data-plane/deploy/vultr
+EnvironmentFile=/etc/miry-data-collector/edge.env
+WorkingDirectory=/opt/miry-data-collector/deploy/vultr
 ExecStart=/usr/bin/docker compose up --no-build --no-deps --abort-on-container-exit --exit-code-from collector
 ExecStop=/usr/bin/docker compose stop --timeout 120
 SuccessExitStatus=130

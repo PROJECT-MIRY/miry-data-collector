@@ -26,21 +26,8 @@ if [ -z "$public_key" ] || [ "$(printf '%s\n' "$public_key" | wc -l)" -ne 1 ]; t
     exit 1
 fi
 
-legacy_config=/etc/ssh/sshd_config.d/ft-data-puller.conf
-if [ -f "$legacy_config" ]; then
-    if ! grep -Eq '^Match[[:space:]]+User[[:space:]]+data-puller[[:space:]]*$' \
-        "$legacy_config" \
-        || ! grep -Eq '^[[:space:]]+ForceCommand[[:space:]]+internal-sftp[[:space:]]*$' \
-            "$legacy_config"
-    then
-        echo "refusing to disable unrecognized legacy SSH config: $legacy_config" >&2
-        exit 1
-    fi
-    mv "$legacy_config" "$legacy_config.disabled-v0.2"
-fi
-
 install -d -o root -g root -m 755 /etc/ssh/authorized_keys
-gateway=/opt/ft-shadow-data-plane/deploy/vultr/rsync_gateway.py
+gateway=/opt/miry-data-collector/deploy/vultr/rsync_gateway.py
 if [ ! -x "$gateway" ]; then
     echo "missing restricted rsync gateway: $gateway" >&2
     exit 1
@@ -56,7 +43,7 @@ if ! runuser -u data-puller -- test -r /etc/ssh/authorized_keys/data-puller; the
 fi
 
 install -d -o root -g root -m 755 /etc/ssh/sshd_config.d
-install -o root -g root -m 600 /dev/null /etc/ssh/sshd_config.d/60-ft-data-rsync.conf
+install -o root -g root -m 600 /dev/null /etc/ssh/sshd_config.d/60-miry-data-rsync.conf
 printf '%s\n' \
     'Match User data-puller' \
     '    AuthorizedKeysFile /etc/ssh/authorized_keys/%u' \
@@ -66,7 +53,7 @@ printf '%s\n' \
     '    PermitTTY no' \
     '    AllowTcpForwarding no' \
     '    X11Forwarding no' \
-    >> /etc/ssh/sshd_config.d/60-ft-data-rsync.conf
+    >> /etc/ssh/sshd_config.d/60-miry-data-rsync.conf
 
 sshd -t
 effective=$(sshd -T -C user=data-puller,host=localhost,addr=127.0.0.1)

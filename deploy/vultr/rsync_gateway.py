@@ -7,7 +7,7 @@ import shlex
 import sys
 from dataclasses import dataclass
 
-DATA_ROOT = "/srv/ft-data-rsync"
+DATA_ROOT = "/srv/miry-data-rsync"
 RRSYNC = "/usr/bin/rrsync"
 
 

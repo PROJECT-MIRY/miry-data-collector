@@ -45,7 +45,7 @@ spool/ACK GC，以及在线应用已经形成的 universe 决策。内部进一�
 
 本项目采用第三种边界：**规则属于 `universe`，执行属于 `collector`**。Vultr 的 collector 收集并
 持久化 evidence，调用纯 `universe` 规则形成 pending decision，再在线应用；同一规则也可由
-`ft-data-select` 对离线 evidence 重放。107 只接收包含 universe identity 的 raw 数据。
+`miry-data-select` 对离线 evidence 重放。107 只接收包含 universe identity 的 raw 数据。
 
 依赖方向为：
 

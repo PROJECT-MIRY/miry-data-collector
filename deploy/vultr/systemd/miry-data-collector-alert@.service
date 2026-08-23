@@ -1,0 +1,7 @@
+[Unit]
+Description=Email alert for failed unit %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/miry-data-collector/alert.env
+ExecStart=/bin/sh -c '/usr/bin/journalctl -u "%i" -n 200 --no-pager | /usr/bin/mail -s "miry collector failure: %i" "$ALERT_EMAIL"'

@@ -206,7 +206,7 @@ CV 对向上和向下偏离同样敏感。窗口末尾的全市场活动冲击�
 
 ```bash
 ARCHIVE=dist/v0.3.7/formal-universe-7.0-20260822T015604Z.sources.tar.gz
-WORK_DIR=$(mktemp -d /tmp/ft-market-regime.XXXXXX)
+WORK_DIR=$(mktemp -d /tmp/miry-market-regime.XXXXXX)
 tar -xzf "$ARCHIVE" -C "$WORK_DIR"
 mkdir -p "$WORK_DIR/42d"
 

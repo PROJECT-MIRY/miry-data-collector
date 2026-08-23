@@ -27,13 +27,13 @@ dev = [
 ]
 
 [project.scripts]
-ft-data-edge = "miry.cli.collect:main"
-ft-data-pull = "miry.cli.pull:main"
-ft-data-process = "miry.cli.process:main"
-ft-data-control = "miry.cli.control:main"
-ft-data-select = "miry.cli.select:main"
-ft-data-release = "miry.cli.release:main"
-ft-data-retain = "miry.cli.retain:main"
+miry-data-edge = "miry.cli.collect:main"
+miry-data-pull = "miry.cli.pull:main"
+miry-data-process = "miry.cli.process:main"
+miry-data-control = "miry.cli.control:main"
+miry-data-select = "miry.cli.select:main"
+miry-data-release = "miry.cli.release:main"
+miry-data-retain = "miry.cli.retain:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/miry"]

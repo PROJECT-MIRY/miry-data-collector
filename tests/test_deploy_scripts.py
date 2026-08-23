@@ -39,16 +39,24 @@ def test_project_and_release_identity_use_miry_name() -> None:
     release = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="ascii")
 
     assert project["project"]["name"] == "miry-data-collector"
+    assert set(project["project"]["scripts"]) == {
+        "miry-data-edge",
+        "miry-data-pull",
+        "miry-data-process",
+        "miry-data-control",
+        "miry-data-select",
+        "miry-data-release",
+        "miry-data-retain",
+    }
     assert readme.startswith("# miry-data-collector\n")
     assert "ghcr.io/${{ github.repository }}" in release
     assert "miry-data-collector.sif" in release
-    assert "ft-shadow-data-plane.sif" not in release
 
 
 def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     config = load_collector_config(PROJECT_ROOT / "deploy/vultr/edge.yaml.example")
     compose = (PROJECT_ROOT / "deploy/vultr/compose.yaml").read_text(encoding="ascii")
-    service = (PROJECT_ROOT / "deploy/vultr/systemd/ft-shadow-data-plane.service").read_text(
+    service = (PROJECT_ROOT / "deploy/vultr/systemd/miry-data-collector.service").read_text(
         encoding="ascii"
     )
 
@@ -137,11 +145,11 @@ def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:
     [
         (
             "rsync --server --sender -logDtpre.iLsfxCIvu . ready/",
-            ("-ro", "/srv/ft-data-rsync/ready"),
+            ("-ro", "/srv/miry-data-rsync/ready"),
         ),
         (
             "rsync --server -logDtpre.iLsfxCIvu . control/acks/",
-            ("-wo", "-no-del", "/srv/ft-data-rsync/control/acks"),
+            ("-wo", "-no-del", "/srv/miry-data-rsync/control/acks"),
         ),
     ],
 )
@@ -183,19 +191,19 @@ def test_campus_installer_uses_hash_named_release(tmp_path: Path) -> None:
         text=True,
         env={
             **os.environ,
-            "FT_APPTAINER": str(fake_apptainer),
-            "FT_CAMPUS_ROOT": str(install_root),
+            "MIRY_APPTAINER": str(fake_apptainer),
+            "MIRY_CAMPUS_ROOT": str(install_root),
         },
     )
 
     assert result.returncode == 0, result.stderr
     digest = hashlib.sha256(release.read_bytes()).hexdigest()
-    versioned_release = install_root / f"ft-shadow-data-plane-{digest}.sif"
-    active_release = install_root / "ft-shadow-data-plane.sif"
+    versioned_release = install_root / f"miry-data-collector-{digest}.sif"
+    active_release = install_root / "miry-data-collector.sif"
     assert versioned_release.read_bytes() == release.read_bytes()
     assert active_release.is_symlink()
     assert active_release.resolve() == versioned_release
-    assert (install_root / "ft-shadow-data-plane.sandbox").is_symlink()
+    assert (install_root / "miry-data-collector.sandbox").is_symlink()
     assert os.access(install_root / "pull-once.sh", os.X_OK)
     assert (install_root / "status").is_dir()
     assert (install_root / "data/transfer-ledger").is_dir()
@@ -219,7 +227,7 @@ def test_submit_day_builds_dependency_chain(tmp_path: Path) -> None:
         text=True,
         env={
             **os.environ,
-            "FT_PROCESSING_ENV": str(processing_env),
+            "MIRY_PROCESSING_ENV": str(processing_env),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "SBATCH_LOG": str(sbatch_log),
         },
@@ -256,7 +264,7 @@ def test_submit_day_rejects_duplicate_symbols(tmp_path: Path) -> None:
         text=True,
         env={
             **os.environ,
-            "FT_PROCESSING_ENV": str(processing_env),
+            "MIRY_PROCESSING_ENV": str(processing_env),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "SBATCH_LOG": str(sbatch_log),
         },
@@ -280,7 +288,7 @@ def test_submit_day_rejects_out_of_order_checkpoint_processing(tmp_path: Path) -
     previous_raw.write_text("{}", encoding="ascii")
     environment = {
         **os.environ,
-        "FT_PROCESSING_ENV": str(processing_env),
+        "MIRY_PROCESSING_ENV": str(processing_env),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "SBATCH_LOG": str(sbatch_log),
     }
@@ -318,12 +326,12 @@ def _write_processing_env(tmp_path: Path, *, concurrency: int) -> Path:
     path.write_text(
         "\n".join(
             (
-                f"FT_APPTAINER={tmp_path / 'apptainer'}",
-                f"FT_DATA_IMAGE={tmp_path / 'release.sandbox'}",
-                f"FT_RAW_ROOT={tmp_path / 'raw'}",
-                f"FT_DERIVED_ROOT={tmp_path / 'derived'}",
-                "FT_COLLECTOR=tokyo01",
-                f"FT_L2_CONCURRENCY={concurrency}",
+                f"MIRY_APPTAINER={tmp_path / 'apptainer'}",
+                f"MIRY_DATA_IMAGE={tmp_path / 'release.sandbox'}",
+                f"MIRY_RAW_ROOT={tmp_path / 'raw'}",
+                f"MIRY_DERIVED_ROOT={tmp_path / 'derived'}",
+                "MIRY_COLLECTOR=tokyo01",
+                f"MIRY_L2_CONCURRENCY={concurrency}",
                 "",
             )
         ),

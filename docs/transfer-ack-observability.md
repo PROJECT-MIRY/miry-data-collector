@@ -28,10 +28,10 @@ data/transfer-ledger/date=YYYY-MM-DD/events.jsonl
 Vultr：
 
 ```text
-/srv/ft-data-rsync/control/transfer-status.json
-/srv/ft-data-rsync/control/transfer-ledger/date=YYYY-MM-DD/events.jsonl
-/srv/ft-data-rsync/control/applying-acks/      GC 崩溃恢复 transaction
-/srv/ft-data-rsync/control/rejected-acks/      无效、未知或 hash 冲突 ACK
+/srv/miry-data-rsync/control/transfer-status.json
+/srv/miry-data-rsync/control/transfer-ledger/date=YYYY-MM-DD/events.jsonl
+/srv/miry-data-rsync/control/applying-acks/      GC 崩溃恢复 transaction
+/srv/miry-data-rsync/control/rejected-acks/      无效、未知或 hash 冲突 ACK
 ```
 
 JSONL 是 append-only UTC 日志。每个事件包含 `event_id`、UTC `occurred_at`、`chunk_id`、
@@ -63,10 +63,10 @@ tail -n 20 "/home/scc/pb24000367/Projects/bn/data/transfer-ledger/date=$LEDGER_D
 Vultr：
 
 ```bash
-sudo jq . /srv/ft-data-rsync/control/transfer-status.json
+sudo jq . /srv/miry-data-rsync/control/transfer-status.json
 LEDGER_DATE=$(date -u +%F)
-sudo tail -n 20 "/srv/ft-data-rsync/control/transfer-ledger/date=$LEDGER_DATE/events.jsonl"
-sudo find /srv/ft-data-rsync/control/rejected-acks -type f -maxdepth 1 -print
+sudo tail -n 20 "/srv/miry-data-rsync/control/transfer-ledger/date=$LEDGER_DATE/events.jsonl"
+sudo find /srv/miry-data-rsync/control/rejected-acks -type f -maxdepth 1 -print
 ```
 
 正常状态要求 107 `state=ok`、`acks_pushed` 等于 `acks_queued`、Vultr

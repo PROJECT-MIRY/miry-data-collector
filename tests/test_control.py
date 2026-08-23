@@ -147,7 +147,7 @@ def test_candidate_override_cli_leaves_version_allocation_to_edge(
         sys,
         "argv",
         [
-            "ft-data-control",
+            "miry-data-control",
             "--effective-at",
             "2099-01-01T00:00:00Z",
             "--boundary-file",

@@ -10,9 +10,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 collector_user=data-puller
 collector_group=data-puller
 collector_id=10001
-deploy_root=/opt/ft-shadow-data-plane/deploy/vultr
-config_root=/etc/ft-shadow-data-plane
-data_root=/srv/ft-data-rsync
+deploy_root=/opt/miry-data-collector/deploy/vultr
+config_root=/etc/miry-data-collector
+data_root=/srv/miry-data-rsync
 
 for command_name in rsync rrsync; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -82,17 +82,17 @@ install -m 555 "$script_dir/verify.sh" "$deploy_root/verify.sh"
 install -m 555 "$script_dir/configure-rsync.sh" "$deploy_root/configure-rsync.sh"
 install -m 555 "$script_dir/rsync_gateway.py" "$deploy_root/rsync_gateway.py"
 install -m 644 \
-    "$script_dir/systemd/ft-shadow-data-plane.service" \
-    "$deploy_root/systemd/ft-shadow-data-plane.service"
+    "$script_dir/systemd/miry-data-collector.service" \
+    "$deploy_root/systemd/miry-data-collector.service"
 install -m 644 \
-    "$script_dir/systemd/ft-shadow-data-plane-alert@.service" \
-    "$deploy_root/systemd/ft-shadow-data-plane-alert@.service"
+    "$script_dir/systemd/miry-data-collector-alert@.service" \
+    "$deploy_root/systemd/miry-data-collector-alert@.service"
 install -m 644 \
-    "$script_dir/systemd/ft-shadow-data-plane.service" \
-    /etc/systemd/system/ft-shadow-data-plane.service
+    "$script_dir/systemd/miry-data-collector.service" \
+    /etc/systemd/system/miry-data-collector.service
 install -m 644 \
-    "$script_dir/systemd/ft-shadow-data-plane-alert@.service" \
-    /etc/systemd/system/ft-shadow-data-plane-alert@.service
+    "$script_dir/systemd/miry-data-collector-alert@.service" \
+    /etc/systemd/system/miry-data-collector-alert@.service
 
 if [ ! -e "$config_root/edge.yaml" ]; then
     install \

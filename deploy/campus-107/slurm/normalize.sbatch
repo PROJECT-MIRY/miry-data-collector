@@ -1,20 +1,20 @@
 #!/bin/sh
-#SBATCH --job-name=ft-normalize
+#SBATCH --job-name=miry-normalize
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
 #SBATCH --mail-type=FAIL
 
 set -eu
-: "${FT_APPTAINER:?}"
-: "${FT_DATA_IMAGE:?}"
-: "${FT_RAW_ROOT:?}"
-: "${FT_DERIVED_ROOT:?}"
-: "${FT_COLLECTOR:?}"
-: "${FT_UTC_DATE:?}"
+: "${MIRY_APPTAINER:?}"
+: "${MIRY_DATA_IMAGE:?}"
+: "${MIRY_RAW_ROOT:?}"
+: "${MIRY_DERIVED_ROOT:?}"
+: "${MIRY_COLLECTOR:?}"
+: "${MIRY_UTC_DATE:?}"
 
-"$FT_APPTAINER" exec --writable "$FT_DATA_IMAGE" ft-data-process normalize \
-  --raw-root "$FT_RAW_ROOT" \
-  --derived-root "$FT_DERIVED_ROOT" \
-  --collector "$FT_COLLECTOR" \
-  --date "$FT_UTC_DATE"
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-process normalize \
+  --raw-root "$MIRY_RAW_ROOT" \
+  --derived-root "$MIRY_DERIVED_ROOT" \
+  --collector "$MIRY_COLLECTOR" \
+  --date "$MIRY_UTC_DATE"

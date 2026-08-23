@@ -1,7 +1,0 @@
-[Unit]
-Description=Email alert for failed unit %i
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/ft-shadow-data-plane/alert.env
-ExecStart=/bin/sh -c '/usr/bin/journalctl -u "%i" -n 200 --no-pager | /usr/bin/mail -s "ft-shadow edge failure: %i" "$ALERT_EMAIL"'

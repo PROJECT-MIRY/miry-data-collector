@@ -38,7 +38,7 @@ WebSocket route 会请求重连到旧分片。短暂交接期的重复事件由 
 每分钟日志包含各 public route 的实际消息率：
 
 ```bash
-docker logs ft-shadow-data-plane-edge 2>&1 | grep 'public traffic minute'
+journalctl -u miry-data-collector.service | grep 'public traffic minute'
 ```
 
 `route_rates` 长期明显失衡时，应先检查 symbol 的观测峰值和连接异常。配置中的基准只用于证据不足

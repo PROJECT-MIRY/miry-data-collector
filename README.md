@@ -4,8 +4,8 @@ Binance USD-M 正式数据采集与重建流水线。v0.4.0 持续采集 60 个�
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
-`miry-data-collector`，Python import 根为 `miry`。现网使用的 `ft-data-*` CLI、systemd unit
-和运行目录仍是部署接口；源码不包含旧 `ft_shadow_data_plane` 包或兼容层。
+`miry-data-collector`，Python import 根为 `miry`。CLI、systemd unit、环境变量和运行目录统一使用
+`miry` 前缀；源码不包含旧 Python 包、命令别名或运行时兼容层。
 
 ```text
 Binance -> Vultr collector -> Parquet/Zstd ready/
@@ -121,8 +121,13 @@ add-ready-remove 两阶段交接，不能为了均衡重启采集器或先删除
 样本的最大值；3 次 depth snapshot 仅用于 10/50 bps 深度。该变化降低单个异常报价对横截面排名
 的影响，不改变点差仅参与排名、不作为绝对拒绝门槛的规则。
 
-v0.4.0 删除旧 `ft_shadow_data_plane` Python 包和 `central`/`edge` 源码拓扑，改用职责明确的
+v0.4.0 删除旧 Python 包和 `central`/`edge` 源码拓扑，改用职责明确的
 `miry.collector`、`miry.pipeline`、`miry.universe`、`miry.contracts` 和 `miry.cli`。这是 Python
 import/API 的破坏性变更，但不改变 raw schema、rsync/ACK、gap、universe identity 或磁盘数据布局；
 两端必须升级 runtime，但禁止 clean start 或删除历史数据。详见
 [v0.4.0 架构重构发布说明](docs/v0.4.0-architecture-refactor-2026-08-23.md)。
+
+v0.4.0 完成运行接口改名：命令统一为 `miry-data-*`，环境变量统一为 `MIRY_*`，Vultr 使用
+`miry-data-collector.service`、`/opt/miry-data-collector`、`/etc/miry-data-collector` 和
+`/srv/miry-data-rsync`。107 的永久 `data/raw`、`data/derived`、transfer ledger 以及 Vultr
+现有 spool 均原地保留；部署只重命名目录和配置引用，不重写正式数据。

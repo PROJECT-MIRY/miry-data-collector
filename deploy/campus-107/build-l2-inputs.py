@@ -28,6 +28,7 @@ L2_COLUMNS = (
     "bids",
     "asks",
 )
+PARTITION_COLUMNS = L2_COLUMNS[1:]
 DEPTH_STREAMS = pa.array(("depth", "depth_snapshot"))
 
 
@@ -38,7 +39,17 @@ def main() -> None:
     parser.add_argument("--derived-root", type=Path, required=True)
     parser.add_argument("--collector", required=True)
     parser.add_argument("--date", required=True)
+    parser.add_argument("--cleanup", action="store_true")
     args = parser.parse_args()
+    pa.set_cpu_count(int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
+    if args.cleanup:
+        removed = cleanup_l2_inputs(
+            derived_root=args.derived_root,
+            collector=args.collector,
+            utc_date=args.date,
+        )
+        print(f"L2 inputs cleanup complete date={args.date} removed={removed}")
+        return
     marker = build_l2_inputs(
         derived_root=args.derived_root,
         collector=args.collector,
@@ -85,7 +96,7 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
     try:
         for path in sorted(typed_root.glob("*.typed.parquet")):
             parquet = pq.ParquetFile(path)
-            for batch in parquet.iter_batches(batch_size=20_000, columns=L2_COLUMNS):
+            for batch in parquet.iter_batches(batch_size=100_000, columns=L2_COLUMNS):
                 depth_batch = batch.filter(
                     pc.is_in(batch.column("stream_type"), value_set=DEPTH_STREAMS)
                 )
@@ -101,9 +112,9 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
                             build_root / f"symbol={symbol}.parquet",
                             selected.schema,
                             compression="zstd",
-                            compression_level=3,
+                            compression_level=1,
                             use_dictionary=True,
-                            write_statistics=True,
+                            write_statistics=False,
                         )
                         writers[symbol] = writer
                     writer.write_batch(selected)
@@ -122,12 +133,13 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             for symbol in symbols
         }
         marker = {
-            "schema_version": 1,
+            "schema_version": 2,
             "collector_id": collector,
             "utc_date": utc_date,
             "normalized_sha256": source_hash,
             "symbols": symbols,
             "files": files,
+            "schedule": sorted(symbols, key=lambda symbol: (-row_counts[symbol], symbol)),
             "ignored_rows": ignored_rows,
             "total_rows": sum(row_counts.values()),
             "total_bytes": sum(item["size_bytes"] for item in files.values()),
@@ -168,7 +180,7 @@ def group_by_symbol_preserving_order(
     symbols = encoded.values.to_pylist()
     starts = [0, *ends[:-1]]
     return [
-        (symbol, ordered.slice(start, end - start).select(L2_COLUMNS))
+        (symbol, ordered.slice(start, end - start).select(PARTITION_COLUMNS))
         for symbol, start, end in zip(symbols, starts, ends, strict=True)
     ]
 
@@ -181,7 +193,7 @@ def load_marker(output_root: Path) -> dict[str, Any] | None:
 def validate_outputs(
     output_root: Path, marker: dict[str, Any], expected_symbols: tuple[str, ...]
 ) -> None:
-    if tuple(marker.get("symbols") or ()) != expected_symbols:
+    if marker.get("schema_version") != 2 or tuple(marker.get("symbols") or ()) != expected_symbols:
         raise ValueError(f"L2 input cache universe mismatch: {output_root}")
     files = marker.get("files")
     if not isinstance(files, dict):
@@ -196,6 +208,27 @@ def validate_outputs(
             or path.stat().st_size != int(item.get("size_bytes", -1))
         ):
             raise ValueError(f"invalid L2 input cache file: {path}")
+
+
+def cleanup_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> bool:
+    output_root = derived_root / "l2-inputs" / f"collector={collector}" / f"date={utc_date}"
+    marker = load_marker(output_root)
+    if marker is None:
+        return False
+    typed_root = derived_root / "typed" / f"collector={collector}" / f"date={utc_date}"
+    normalized_hash = hashlib.sha256((typed_root / "_NORMALIZED.json").read_bytes()).hexdigest()
+    symbols = tuple(marker.get("symbols") or ())
+    if (
+        marker.get("collector_id") != collector
+        or marker.get("utc_date") != utc_date
+        or marker.get("normalized_sha256") != normalized_hash
+        or len(symbols) != 60
+    ):
+        raise ValueError(f"refusing to remove invalid L2 input cache: {output_root}")
+    validate_outputs(output_root, marker, symbols)
+    shutil.rmtree(output_root)
+    fsync_directory(output_root.parent)
+    return True
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:

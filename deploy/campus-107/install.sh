@@ -26,9 +26,10 @@ fi
 install -d -m 750 \
     "$install_root" \
     "$install_root/logs" \
+    "$install_root/logs/processing" \
     "$install_root/rsync" \
     "$install_root/status" \
-    "$install_root/symbols" \
+    "$install_root/status/processing" \
     "$data_root/raw" \
     "$data_root/derived" \
     "$data_root/transfer-ledger" \
@@ -59,15 +60,30 @@ if [ ! -d "$sandbox_target" ]; then
 fi
 ln -sfn "$sandbox_name" "$install_root/miry-data-collector.sandbox"
 install -m 555 "$script_dir/pull-once.sh" "$install_root/pull-once.sh"
-install -m 555 "$script_dir/submit-day.sh" "$deploy_root/submit-day.sh"
+install -m 555 "$script_dir/submit-ready-day.sh" "$deploy_root/submit-ready-day.sh"
+install -m 555 "$script_dir/build-l2-inputs.py" "$deploy_root/build-l2-inputs.py"
+install -m 555 "$script_dir/processing-status.py" "$deploy_root/processing-status.py"
 install -m 555 "$script_dir/verify.sh" "$deploy_root/verify.sh"
 install -m 444 "$script_dir/README.md" "$deploy_root/README.md"
 install -m 444 "$script_dir/central.yaml.example" "$deploy_root/central.yaml.example"
 install -m 444 "$script_dir/processing.env.example" "$deploy_root/processing.env.example"
 install -m 444 "$script_dir/crontab.example" "$deploy_root/crontab.example"
 install -m 444 "$script_dir/slurm/normalize.sbatch" "$deploy_root/slurm/normalize.sbatch"
-install -m 444 "$script_dir/slurm/l2-array.sbatch" "$deploy_root/slurm/l2-array.sbatch"
+install -m 444 "$script_dir/slurm/l2-inputs.sbatch" "$deploy_root/slurm/l2-inputs.sbatch"
+install -m 444 "$script_dir/slurm/l2.sbatch" "$deploy_root/slurm/l2.sbatch"
 install -m 444 "$script_dir/slurm/finalize.sbatch" "$deploy_root/slurm/finalize.sbatch"
+
+for obsolete in \
+    submit-day.sh submit-range.sh submit-symbol-range.py optimized-l2-runner.py \
+    build-legacy-dedup-boundary.py finish-legacy-normalize.py \
+    slurm/l2-array.sbatch slurm/optimized-normalize.sbatch \
+    slurm/optimized-l2-inputs.sbatch slurm/optimized-l2.sbatch \
+    slurm/optimized-finalize.sbatch slurm/range-normalize.sbatch \
+    slurm/range-symbols.sbatch slurm/range-l2.sbatch slurm/range-finalize.sbatch \
+    slurm/verify-dedup-boundary.sbatch
+do
+    rm -f "$deploy_root/$obsolete"
+done
 
 if [ ! -e "$install_root/central.yaml" ]; then
     install -m 600 "$script_dir/central.yaml.example" "$install_root/central.yaml"

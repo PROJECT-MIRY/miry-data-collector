@@ -1,4 +1,4 @@
-# v0.5.1 正式采集与处理合同
+# v0.5.2 正式采集与处理合同
 
 ## 本阶段目标
 
@@ -185,8 +185,12 @@ formal start 所在 partial day 开始按 UTC 日期顺序处理，不能跳日�
 ## 日质量与去重合同
 
 normalizer 从 sealed raw 的 `UNIVERSE_DECISION` 提取权威结构化版本、universe hash 和恰好 60 个
-成员。107 的 symbol 文件只是提交参数，必须恰好 60 个唯一大写 symbol，且 finalize 会再次要求它与
-raw 权威集合完全一致，不能靠少传 symbol 缩小验收范围。
+成员。调度器不接受人工 symbol 文件；L2 array 和 finalize 都从 `_NORMALIZED.json` 读取同一权威
+集合，不能靠少传 symbol 缩小验收范围。
+
+normalized typed 数据只允许在 L2 input 阶段扫描一次并按 symbol 分区；每个 L2 task 只能打开自己的
+单一 partition。array 按 partition 行数从大到小调度并最多并发 32 个单核 task，避免重币延迟到第二批
+形成长尾。partition 是可再生缓存，terminal finalize 后必须校验并删除，不属于长期 derived 合同。
 
 每币 expected window 在首日从 `FORMAL_COLLECTION_STARTED` 开始，其余日期覆盖完整 UTC 日。
 `_PROCESSED.json` 仅在以下条件全部满足时生成：

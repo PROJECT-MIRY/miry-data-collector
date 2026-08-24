@@ -120,7 +120,7 @@ L2 的 `pu` 连续性只能在 depth **恢复后**证明中间丢过更新，不
 在 v0.3.0 中只要求每个 symbol 有**至少一个非空区间**，没有累加有效时长。一天只有 1 秒 VALID
 也能通过。
 
-另一个更基础的问题在 [campus-107/submit-day.sh](../deploy/campus-107/submit-day.sh)：预期 symbol
+另一个更基础的问题在当时的 `campus-107/submit-day.sh`（现已删除）：预期 symbol
 完全来自命令行传入的文本文件。脚本只验证“非空、格式正确、无重复”，不要求 60 个，不核对 generation、
 `universe_hash` 或 sealed day。传入只含 1 个 symbol 的文件时，finalize 可以合法写出只声明该币的
 `_PROCESSED.json`。

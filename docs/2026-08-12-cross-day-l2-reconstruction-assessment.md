@@ -84,7 +84,8 @@ L2 CLI 只接受一个 `--date`，并仅把该日期传给 reconstructor：
 [central/process_cli.py L16-L28](../src/miry/cli/process.py)、
 [central/process_cli.py L51-L58](../src/miry/cli/process.py)。Slurm array 同样只传
 `MIRY_UTC_DATE`，没有前一日 checkpoint 或依赖参数：
-[l2-array.sbatch L8-L26](../deploy/campus-107/slurm/l2-array.sbatch#L8-L26)。
+当时的 `l2-array.sbatch` 已由当前单一自动流水线中的
+[l2.sbatch](../deploy/campus-107/slurm/l2.sbatch) 取代。
 
 ### 5. 新日 reconstructor 必须看到当日 snapshot 才能进入 VALID
 

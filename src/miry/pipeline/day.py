@@ -7,7 +7,7 @@ from miry.contracts.symbols import validate_exchange_symbol
 from miry.pipeline.clock import build_clock_quality
 from miry.pipeline.d0 import build_d0_audit
 from miry.pipeline.gaps import build_transport_gap_ledger
-from miry.pipeline.l2 import L2DayReconstructor
+from miry.pipeline.l2 import L2DayReconstructor, partitioned_l2_input
 from miry.pipeline.normalize import DayNormalizer, NormalizeResult
 
 
@@ -41,11 +41,18 @@ def reconstruct_l2_day(
     utc_date: date,
     exchange_symbol: str,
 ) -> tuple[int, int]:
+    exchange_symbol = validate_exchange_symbol(exchange_symbol.upper())
     return L2DayReconstructor(
         derived_root=derived_root,
         collector_id=collector_id,
         utc_date=utc_date,
-        exchange_symbol=validate_exchange_symbol(exchange_symbol.upper()),
+        exchange_symbol=exchange_symbol,
+        input_path=partitioned_l2_input(
+            derived_root=derived_root,
+            collector_id=collector_id,
+            utc_date=utc_date,
+            exchange_symbol=exchange_symbol,
+        ),
     ).run()
 
 

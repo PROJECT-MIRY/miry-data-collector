@@ -5,3 +5,4 @@ MAILTO=""
 R=/home/scc/pb24000367/Projects/bn/runtime
 
 * * * * * "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1
+*/10 * * * * "$R/deploy/campus-107/submit-ready-day.sh" >> "$R/logs/derived-submit.log" 2>&1

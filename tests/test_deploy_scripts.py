@@ -19,7 +19,7 @@ from miry.contracts.serde import universe_hash
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_CAMPUS = PROJECT_ROOT / "deploy" / "campus-107" / "install.sh"
 PULL_ONCE = PROJECT_ROOT / "deploy" / "campus-107" / "pull-once.sh"
-SUBMIT_DAY = PROJECT_ROOT / "deploy" / "campus-107" / "submit-day.sh"
+SUBMIT_READY_DAY = PROJECT_ROOT / "deploy" / "campus-107" / "submit-ready-day.sh"
 RSYNC_GATEWAY = PROJECT_ROOT / "deploy" / "vultr" / "rsync_gateway.py"
 VULTR_INSTALL = PROJECT_ROOT / "deploy" / "vultr" / "install.sh"
 VULTR_PREFLIGHT = PROJECT_ROOT / "deploy" / "vultr" / "preflight-upgrade.sh"
@@ -240,6 +240,23 @@ def test_campus_installer_uses_hash_named_release(tmp_path: Path) -> None:
     assert (install_root / "data/transfer-ledger").is_dir()
     assert (install_root / "central.yaml").is_file()
     assert (install_root / "deploy/campus-107/processing.env").is_file()
+    deployed = install_root / "deploy/campus-107"
+    assert os.access(deployed / "submit-ready-day.sh", os.X_OK)
+    assert (deployed / "slurm/l2-inputs.sbatch").is_file()
+    assert (deployed / "slurm/l2.sbatch").is_file()
+    assert not (deployed / "submit-day.sh").exists()
+    assert not (deployed / "submit-range.sh").exists()
+
+
+def test_campus_cron_runs_only_locked_short_wrappers() -> None:
+    crontab = (PROJECT_ROOT / "deploy/campus-107/crontab.example").read_text(
+        encoding="ascii"
+    )
+
+    assert '"$R/pull-once.sh"' in crontab
+    assert '"$R/deploy/campus-107/submit-ready-day.sh"' in crontab
+    assert "apptainer" not in crontab
+    assert "miry-data-process" not in crontab
 
 
 def test_pull_once_serializes_manual_and_scheduled_runs(tmp_path: Path) -> None:
@@ -285,147 +302,177 @@ sleep 1
     assert starts.read_text(encoding="ascii").splitlines() == ["started"]
 
 
-def test_submit_day_builds_dependency_chain(tmp_path: Path) -> None:
+def test_ready_day_scheduler_submits_one_idempotent_partitioned_pipeline(
+    tmp_path: Path,
+) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     sbatch_log = tmp_path / "sbatch.log"
     _write_fake_sbatch(fake_bin / "sbatch")
-    processing_env = _write_processing_env(tmp_path, concurrency=8)
-    symbols = tmp_path / "symbols.txt"
-    _write_symbols(symbols)
-
-    result = subprocess.run(
-        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "MIRY_PROCESSING_ENV": str(processing_env),
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "SBATCH_LOG": str(sbatch_log),
-        },
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [
-        "normalize_job=101",
-        "l2_job=102",
-        "finalize_job=103",
-    ]
-    calls = sbatch_log.read_text(encoding="ascii").splitlines()
-    assert calls[0].endswith("/slurm/normalize.sbatch")
-    assert "--dependency=afterok:101" in calls[1]
-    assert "--array=0-59%8" in calls[1]
-    assert calls[1].endswith("/slurm/l2-array.sbatch")
-    assert "--dependency=afterok:102" in calls[2]
-    assert calls[2].endswith("/slurm/finalize.sbatch")
-
-
-def test_submit_day_rejects_duplicate_symbols(tmp_path: Path) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch_log = tmp_path / "sbatch.log"
-    _write_fake_sbatch(fake_bin / "sbatch")
-    processing_env = _write_processing_env(tmp_path, concurrency=8)
-    symbols = tmp_path / "symbols.txt"
-    _write_symbols(symbols, duplicate=True)
-
-    result = subprocess.run(
-        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            **os.environ,
-            "MIRY_PROCESSING_ENV": str(processing_env),
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "SBATCH_LOG": str(sbatch_log),
-        },
-    )
-
-    assert result.returncode == 1
-    assert "exactly 60 unique" in result.stderr
-    assert not sbatch_log.exists()
-
-
-def test_submit_day_rejects_out_of_order_checkpoint_processing(tmp_path: Path) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch_log = tmp_path / "sbatch.log"
-    _write_fake_sbatch(fake_bin / "sbatch")
-    processing_env = _write_processing_env(tmp_path, concurrency=8)
-    symbols = tmp_path / "symbols.txt"
-    _write_symbols(symbols)
-    previous_raw = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-09/SEALED.json"
-    previous_raw.parent.mkdir(parents=True)
-    previous_raw.write_text("{}", encoding="ascii")
+    processing_env = _write_processing_env(tmp_path, concurrency=16)
+    with processing_env.open("a", encoding="ascii") as destination:
+        destination.write(
+            "MIRY_PROCESSING_START_DATE=2026-08-10\n"
+            "MIRY_SLURM_ACCOUNT=stu\n"
+            "MIRY_SLURM_PARTITION=Students\n"
+            "MIRY_SLURM_QOS=qos_stu_cpu_long\n"
+        )
+    sealed = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-10/SEALED.json"
+    sealed.parent.mkdir(parents=True)
+    sealed.write_text("{}", encoding="ascii")
     environment = {
         **os.environ,
         "MIRY_PROCESSING_ENV": str(processing_env),
+        "MIRY_PROCESSING_STATE_ROOT": str(tmp_path / "state"),
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "SBATCH_LOG": str(sbatch_log),
     }
 
-    rejected = subprocess.run(
-        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
+    first = subprocess.run(
+        [str(SUBMIT_READY_DAY), "2026-08-11"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    second = subprocess.run(
+        [str(SUBMIT_READY_DAY), "2026-08-11"],
         check=False,
         capture_output=True,
         text=True,
         env=environment,
     )
 
-    assert rejected.returncode == 1
-    assert "previous UTC day has no terminal quality result" in rejected.stderr
-    assert not sbatch_log.exists()
-
-    previous_processed = (
-        tmp_path / "derived/quality/collector=tokyo01/date=2026-08-09/_PROCESSED.json"
-    )
-    previous_processed.parent.mkdir(parents=True)
-    previous_processed.write_text("{}", encoding="ascii")
-    accepted = subprocess.run(
-        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-
-    assert accepted.returncode == 0, accepted.stderr
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    calls = sbatch_log.read_text(encoding="ascii").splitlines()
+    assert len(calls) == 4
+    assert calls[0].endswith("/slurm/normalize.sbatch")
+    assert "--dependency=afterok:101" in calls[1]
+    assert calls[1].endswith("/slurm/l2-inputs.sbatch")
+    assert "--dependency=afterok:102" in calls[2]
+    assert "--array=0-59%16" in calls[2]
+    assert calls[2].endswith("/slurm/l2.sbatch")
+    assert "--dependency=afterok:103" in calls[3]
+    assert calls[3].endswith("/slurm/finalize.sbatch")
 
 
-def test_submit_day_accepts_previous_quality_rejection(tmp_path: Path) -> None:
+def test_ready_day_scheduler_advances_past_quality_rejection(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     sbatch_log = tmp_path / "sbatch.log"
     _write_fake_sbatch(fake_bin / "sbatch")
-    processing_env = _write_processing_env(tmp_path, concurrency=8)
-    symbols = tmp_path / "symbols.txt"
-    _write_symbols(symbols)
-    previous_raw = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-09/SEALED.json"
-    previous_raw.parent.mkdir(parents=True)
-    previous_raw.write_text("{}", encoding="ascii")
-    previous_rejected = (
-        tmp_path / "derived/quality/collector=tokyo01/date=2026-08-09/_QUALITY_REJECTED.json"
+    processing_env = _write_processing_env(tmp_path, concurrency=32)
+    with processing_env.open("a", encoding="ascii") as destination:
+        destination.write(
+            "MIRY_PROCESSING_START_DATE=2026-08-10\n"
+            "MIRY_SLURM_ACCOUNT=stu\n"
+            "MIRY_SLURM_PARTITION=Students\n"
+            "MIRY_SLURM_QOS=qos_stu_cpu_long\n"
+        )
+    rejected = (
+        tmp_path / "derived/quality/collector=tokyo01/date=2026-08-10/_QUALITY_REJECTED.json"
     )
-    previous_rejected.parent.mkdir(parents=True)
-    previous_rejected.write_text("{}", encoding="ascii")
+    rejected.parent.mkdir(parents=True)
+    rejected.write_text("{}", encoding="ascii")
+    sealed = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-11/SEALED.json"
+    sealed.parent.mkdir(parents=True)
+    sealed.write_text("{}", encoding="ascii")
 
     result = subprocess.run(
-        [str(SUBMIT_DAY), "2026-08-10", str(symbols)],
+        [str(SUBMIT_READY_DAY), "2026-08-12"],
         check=False,
         capture_output=True,
         text=True,
         env={
             **os.environ,
             "MIRY_PROCESSING_ENV": str(processing_env),
+            "MIRY_PROCESSING_STATE_ROOT": str(tmp_path / "state"),
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "SBATCH_LOG": str(sbatch_log),
         },
     )
 
     assert result.returncode == 0, result.stderr
+    assert "date=2026-08-11" in result.stdout
+    assert (tmp_path / "state/next-date").read_text(encoding="ascii") == "2026-08-11\n"
+    assert len(sbatch_log.read_text(encoding="ascii").splitlines()) == 4
+
+
+def test_ready_day_scheduler_does_not_retry_partial_submission(tmp_path: Path) -> None:
+    processing_env = _write_processing_env(tmp_path, concurrency=32)
+    with processing_env.open("a", encoding="ascii") as destination:
+        destination.write(
+            "MIRY_PROCESSING_START_DATE=2026-08-10\n"
+            "MIRY_SLURM_ACCOUNT=stu\n"
+            "MIRY_SLURM_PARTITION=Students\n"
+            "MIRY_SLURM_QOS=qos_stu_cpu_long\n"
+        )
+    sealed = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-10/SEALED.json"
+    sealed.parent.mkdir(parents=True)
+    sealed.write_text("{}", encoding="ascii")
+    partial = tmp_path / "state/submissions/date=2026-08-10.submitting"
+    partial.mkdir(parents=True)
+    environment = {
+        **os.environ,
+        "MIRY_PROCESSING_ENV": str(processing_env),
+        "MIRY_PROCESSING_STATE_ROOT": str(tmp_path / "state"),
+        "SBATCH_LOG": str(tmp_path / "sbatch.log"),
+    }
+
+    result = subprocess.run(
+        [str(SUBMIT_READY_DAY), "2026-08-11"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "already recorded" in result.stdout
+    assert not (tmp_path / "sbatch.log").exists()
+
+
+def test_ready_day_scheduler_reuses_completed_normalization(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch_log = tmp_path / "sbatch.log"
+    _write_fake_sbatch(fake_bin / "sbatch")
+    processing_env = _write_processing_env(tmp_path, concurrency=32)
+    with processing_env.open("a", encoding="ascii") as destination:
+        destination.write(
+            "MIRY_PROCESSING_START_DATE=2026-08-10\n"
+            "MIRY_SLURM_ACCOUNT=stu\n"
+            "MIRY_SLURM_PARTITION=Students\n"
+            "MIRY_SLURM_QOS=qos_stu_cpu_long\n"
+        )
+    sealed = tmp_path / "raw/collector=tokyo01/day-manifests/date=2026-08-10/SEALED.json"
+    sealed.parent.mkdir(parents=True)
+    sealed.write_text("{}", encoding="ascii")
+    normalized = tmp_path / "derived/typed/collector=tokyo01/date=2026-08-10/_NORMALIZED.json"
+    normalized.parent.mkdir(parents=True)
+    normalized.write_text("{}", encoding="ascii")
+
+    result = subprocess.run(
+        [str(SUBMIT_READY_DAY), "2026-08-11"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIRY_PROCESSING_ENV": str(processing_env),
+            "MIRY_PROCESSING_STATE_ROOT": str(tmp_path / "state"),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "SBATCH_LOG": str(sbatch_log),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "normalize=reused" in result.stdout
+    calls = sbatch_log.read_text(encoding="ascii").splitlines()
+    assert len(calls) == 3
+    assert calls[0].endswith("/slurm/l2-inputs.sbatch")
+    assert "--dependency" not in calls[0]
 
 
 def _write_processing_env(tmp_path: Path, *, concurrency: int) -> Path:
@@ -455,20 +502,12 @@ exit 1
                 f"MIRY_DERIVED_ROOT={tmp_path / 'derived'}",
                 "MIRY_COLLECTOR=tokyo01",
                 f"MIRY_L2_CONCURRENCY={concurrency}",
-                f"MIRY_SYMBOLS_ROOT={tmp_path / 'canonical-symbols'}",
                 "",
             )
         ),
         encoding="ascii",
     )
     return path
-
-
-def _write_symbols(path: Path, *, duplicate: bool = False) -> None:
-    symbols = [f"S{index:03}USDT" for index in range(60)]
-    if duplicate:
-        symbols[-1] = symbols[0]
-    path.write_text("\n".join((*symbols, "")), encoding="ascii")
 
 
 def _write_fake_sbatch(path: Path) -> None:
@@ -478,8 +517,9 @@ set -eu
 printf '%s\\n' "$*" >> "$SBATCH_LOG"
 case "$*" in
     *normalize.sbatch) echo '101;cluster' ;;
-    *l2-array.sbatch) echo '102;cluster' ;;
-    *finalize.sbatch) echo '103;cluster' ;;
+    *l2-inputs.sbatch) echo '102;cluster' ;;
+    *l2.sbatch) echo '103;cluster' ;;
+    *finalize.sbatch) echo '104;cluster' ;;
     *) exit 1 ;;
 esac
 """,

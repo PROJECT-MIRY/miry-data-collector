@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.1 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.2 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -157,3 +157,8 @@ v0.5.1 针对实测秒级成交洪峰，将 raw queue 从 64MiB 扩到 192MiB，
 fast path。70%/50% 水位只做观测，不阻塞接收；只有 192MiB 最终边界耗尽才产生
 `ingest_overload`。部署新增目标镜像配置 preflight，必须在停止旧 collector 前通过，避免配置
 schema 不匹配造成重启循环。raw schema、gap 语义、universe、ACK 和 107 处理合同不变。
+
+v0.5.2 将 107 的三套历史处理入口收敛为一个幂等日流水线：seal ready 后自动提交 normalize、一次
+L2 partition、重币优先的 32 路单核 L2 array 和 finalize。每个 L2 task 只打开自己的 symbol
+partition；价格 Decimal 使用有界缓存，临时 partition 在 terminal finalize 后校验删除。partial
+submission 会停止而不是自动重投。raw、质量门槛、checkpoint 与跨日依赖语义不变。

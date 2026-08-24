@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from functools import lru_cache
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -121,8 +124,8 @@ class StateChange:
 class ConnectionBook:
     connection_id: str
     state: L2State = L2State.UNANCHORED
-    bids: dict[Decimal, Decimal] = field(default_factory=dict)
-    asks: dict[Decimal, Decimal] = field(default_factory=dict)
+    bids: dict[Decimal, str] = field(default_factory=dict)
+    asks: dict[Decimal, str] = field(default_factory=dict)
     previous_update_id: int | None = None
     pending: list[DepthDiff] = field(default_factory=list)
     seen_diffs: set[tuple[int, int, int, bytes]] = field(default_factory=set)
@@ -204,7 +207,12 @@ class ConnectionBook:
     def _try_bridge(self) -> StateChange | None:
         if self.anchor_last_update_id is None or self.anchor_received_ns is None:
             return None
-        candidates = sorted(self.pending, key=lambda diff: diff.receive_seq)
+        candidates = self.pending
+        if any(
+            previous.receive_seq > current.receive_seq
+            for previous, current in pairwise(candidates)
+        ):
+            candidates = sorted(candidates, key=lambda diff: diff.receive_seq)
         candidates = [
             diff for diff in candidates if diff.final_update_id >= self.anchor_last_update_id
         ]
@@ -261,6 +269,7 @@ class L2DayReconstructor:
         collector_id: str,
         utc_date: date,
         exchange_symbol: str,
+        input_path: Path | None = None,
     ) -> None:
         exchange_symbol = validate_exchange_symbol(exchange_symbol)
         self._typed_root = (
@@ -283,6 +292,7 @@ class L2DayReconstructor:
         self._date = utc_date
         self._symbol = exchange_symbol
         self._collector_id = collector_id
+        self._input_path = input_path
         self._day_start_ns = int(
             datetime.combine(utc_date, datetime.min.time(), UTC).timestamp() * 1_000_000_000
         )
@@ -497,9 +507,12 @@ class L2DayReconstructor:
         )
 
     def _depth_rows(self) -> Any:
-        files = sorted(self._typed_root.glob("*.typed.parquet"))
+        files = (
+            (self._input_path,)
+            if self._input_path is not None
+            else tuple(sorted(self._typed_root.glob("*.typed.parquet")))
+        )
         columns = [
-            "exchange_symbol",
             "stream_type",
             "connection_id",
             "receive_seq",
@@ -512,9 +525,14 @@ class L2DayReconstructor:
             "bids",
             "asks",
         ]
+        if self._input_path is None:
+            columns.insert(0, "exchange_symbol")
         for path in files:
             parquet = pq.ParquetFile(path)
             for batch in parquet.iter_batches(batch_size=10_000, columns=columns):
+                if self._input_path is not None:
+                    yield from batch.to_pylist()
+                    continue
                 for row in batch.to_pylist():
                     if row["exchange_symbol"] != self._symbol:
                         continue
@@ -615,14 +633,47 @@ def _row_levels(values: list[dict[str, str]]) -> tuple[tuple[str, str], ...]:
     return tuple((value["price"], value["quantity"]) for value in values)
 
 
-def _book_side(levels: tuple[tuple[str, str], ...]) -> dict[Decimal, Decimal]:
-    return {
-        Decimal(price): Decimal(quantity) for price, quantity in levels if Decimal(quantity) != 0
-    }
+def _book_side(levels: tuple[tuple[str, str], ...]) -> dict[Decimal, str]:
+    side = {}
+    for price_text, quantity_text in levels:
+        if not _is_zero(quantity_text):
+            side[_price(price_text)] = quantity_text
+    return side
 
 
-def _checkpoint_levels(side: dict[Decimal, Decimal]) -> tuple[tuple[str, str], ...]:
-    return tuple((str(price), str(quantity)) for price, quantity in sorted(side.items()))
+def partitioned_l2_input(
+    *, derived_root: Path, collector_id: str, utc_date: date, exchange_symbol: str
+) -> Path | None:
+    typed_root = (
+        derived_root / "typed" / f"collector={collector_id}" / f"date={utc_date.isoformat()}"
+    )
+    cache_root = (
+        derived_root / "l2-inputs" / f"collector={collector_id}" / f"date={utc_date.isoformat()}"
+    )
+    marker_path = cache_root / "_L2_INPUTS.json"
+    if not marker_path.is_file():
+        return None
+    marker = orjson.loads(marker_path.read_bytes())
+    normalized_hash = hashlib.sha256((typed_root / "_NORMALIZED.json").read_bytes()).hexdigest()
+    item = (marker.get("files") or {}).get(exchange_symbol)
+    path = cache_root / f"symbol={exchange_symbol}.parquet"
+    if (
+        marker.get("schema_version") != 2
+        or marker.get("collector_id") != collector_id
+        or marker.get("utc_date") != utc_date.isoformat()
+        or marker.get("normalized_sha256") != normalized_hash
+        or exchange_symbol not in (marker.get("symbols") or ())
+        or not isinstance(item, dict)
+        or int(item.get("rows", 0)) <= 0
+        or not path.is_file()
+        or path.stat().st_size != int(item.get("size_bytes", -1))
+    ):
+        raise ValueError(f"invalid L2 input cache for {utc_date}: {exchange_symbol}")
+    return path
+
+
+def _checkpoint_levels(side: dict[Decimal, str]) -> tuple[tuple[str, str], ...]:
+    return tuple((str(price), quantity) for price, quantity in sorted(side.items()))
 
 
 def _anchor_checkpoint(book: ConnectionBook) -> AnchoredBookCheckpoint:
@@ -673,14 +724,23 @@ def _diff_from_checkpoint(checkpoint: DepthDiffCheckpoint) -> DepthDiff:
     )
 
 
-def _apply_levels(side: dict[Decimal, Decimal], levels: tuple[tuple[str, str], ...]) -> None:
+def _apply_levels(side: dict[Decimal, str], levels: tuple[tuple[str, str], ...]) -> None:
     for price_text, quantity_text in levels:
-        price = Decimal(price_text)
-        quantity = Decimal(quantity_text)
-        if quantity == 0:
+        price = _price(price_text)
+        if _is_zero(quantity_text):
             side.pop(price, None)
         else:
-            side[price] = quantity
+            side[price] = quantity_text
+
+
+@lru_cache(maxsize=200_000)
+def _price(value: str) -> Decimal:
+    return Decimal(value)
+
+
+def _is_zero(value: str) -> bool:
+    mantissa = value.lower().split("e", 1)[0].lstrip("+-")
+    return bool(mantissa) and all(character in "0." for character in mantissa)
 
 
 def _interval(start: int, end: int, connection_id: str, reason: str) -> dict[str, Any]:

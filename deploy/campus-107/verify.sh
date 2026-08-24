@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 processing_env=${MIRY_PROCESSING_ENV:-$script_dir/processing.env}
 install_root=${MIRY_CAMPUS_ROOT:-/persistent/miry-data-collector}
 
-for command_name in sbatch flock ssh; do
+for command_name in crontab sbatch flock jq ssh; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "missing command: $command_name" >&2
         exit 1
@@ -28,6 +28,25 @@ set +a
 : "${MIRY_DERIVED_ROOT:?MIRY_DERIVED_ROOT is required}"
 : "${MIRY_COLLECTOR:?MIRY_COLLECTOR is required}"
 : "${MIRY_L2_CONCURRENCY:?MIRY_L2_CONCURRENCY is required}"
+: "${MIRY_PROCESSING_START_DATE:?MIRY_PROCESSING_START_DATE is required}"
+: "${MIRY_SLURM_ACCOUNT:?MIRY_SLURM_ACCOUNT is required}"
+: "${MIRY_SLURM_PARTITION:?MIRY_SLURM_PARTITION is required}"
+: "${MIRY_SLURM_QOS:?MIRY_SLURM_QOS is required}"
+
+for path in \
+    "$script_dir/submit-ready-day.sh" \
+    "$script_dir/build-l2-inputs.py" \
+    "$script_dir/processing-status.py" \
+    "$script_dir/slurm/normalize.sbatch" \
+    "$script_dir/slurm/l2-inputs.sbatch" \
+    "$script_dir/slurm/l2.sbatch" \
+    "$script_dir/slurm/finalize.sbatch"
+do
+    if [ ! -r "$path" ]; then
+        echo "missing processing file: $path" >&2
+        exit 1
+    fi
+done
 
 if [ ! -x "$MIRY_APPTAINER" ]; then
     echo "missing executable Apptainer: $MIRY_APPTAINER" >&2
@@ -50,6 +69,10 @@ case "$MIRY_L2_CONCURRENCY" in
         exit 1
         ;;
 esac
+if [ "$MIRY_L2_CONCURRENCY" -gt 32 ]; then
+    echo "MIRY_L2_CONCURRENCY cannot exceed the 32 CPU allocation" >&2
+    exit 1
+fi
 
 "$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-pull --help >/dev/null
 "$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-process --help >/dev/null

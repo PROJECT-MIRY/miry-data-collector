@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.1
+## 2. 保留状态安装 v0.5.2
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
@@ -101,11 +101,12 @@ known_hosts: /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
 ```
 
 `runtime/deploy/campus-107/processing.env` 应使用绝对 Apptainer 路径、writable sandbox、上述
-raw/derived 和 `tokyo01`。赋值两侧不能有空格，含空格的值必须加引号。
+raw/derived、`tokyo01`、正式起始日 `2026-08-22`、`Students` partition、`stu` account 和
+`qos_stu_cpu_long`。L2 并发为 32 个单核 task，正好使用最多 32 CPU。赋值两侧不能有空格。
 
-Binance canonical symbol 可以包含中文，例如 `币安人生USDT`。symbol 文件使用 UTF-8，提交脚本会
-在 sandbox 内验证恰好 60 个唯一、安全的 canonical symbol。中文名称原样进入 WebSocket/REST、raw
-和派生 identity；它不是显示别名，也不会被翻译成另一个 symbol。
+每天的权威 60 币由 normalize 从 sealed raw 的 `UNIVERSE_DECISION` 提取，不能再由人工 symbol
+文件输入。Binance canonical symbol 可以包含中文，例如 `币安人生USDT`；它原样进入 raw 和派生
+identity，不是显示别名。
 
 ## 5. 前台验证和第一次拉取
 
@@ -148,8 +149,8 @@ tail -n 20 "/home/scc/pb24000367/Projects/bn/data/transfer-ledger/date=$LEDGER_D
 
 ## 6. 安装 cron
 
-`crontab` 是当前用户的定时任务表。以下任务每分钟尝试一次。`pull-once.sh` 内部持有
-`pull.lock`，所以定时任务和手工执行使用同一把锁；上一次未结束时不会再启动重叠进程。
+`pull-once.sh` 每分钟短时拉取；`submit-ready-day.sh` 每 10 分钟只检查 seal/terminal/submission
+marker 并调用 `sbatch`，不在 login node 做计算。两个脚本都持有独立 `flock`，不会重叠执行。
 
 运行 `crontab -e`，加入：
 
@@ -161,6 +162,7 @@ MAILTO=""
 R=/home/scc/pb24000367/Projects/bn/runtime
 
 * * * * * "$R/pull-once.sh" >> "$R/logs/pull.log" 2>&1
+*/10 * * * * "$R/deploy/campus-107/submit-ready-day.sh" >> "$R/logs/derived-submit.log" 2>&1
 ```
 
 保存后验证：
@@ -169,6 +171,7 @@ R=/home/scc/pb24000367/Projects/bn/runtime
 crontab -l | nl -ba
 sleep 70
 tail -n 50 /home/scc/pb24000367/Projects/bn/runtime/logs/pull.log
+tail -n 50 /home/scc/pb24000367/Projects/bn/runtime/logs/derived-submit.log
 pgrep -af miry-data-pull || true
 du -sh /home/scc/pb24000367/Projects/bn/data/raw
 ```
@@ -178,27 +181,31 @@ Vultr ACK 为准。
 
 ## 7. Slurm 处理
 
-当某天的 `SEALED.json` 和其引用的全部 chunk 已拉取后，准备当天 60 币文件，每行一个大写
-symbol，然后提交：
+前一 UTC 日的 `SEALED.json` 拉取后，scheduler 自动且仅一次提交：
 
-```bash
-/home/scc/pb24000367/Projects/bn/runtime/deploy/campus-107/submit-day.sh \
-  2026-08-12 \
-  /home/scc/pb24000367/Projects/bn/runtime/symbols/2026-08-12.txt
+```text
+normalize (1 CPU / 4GiB)
+  -> L2 input partition (2 CPU / 8GiB，一次扫描 typed)
+  -> L2 array (60 tasks，最多 32 x 1 CPU / 4GiB)
+  -> finalize (1 CPU / 2GiB)
 ```
 
-脚本依次提交 normalize、受并发限制的 L2 array 和 finalize，并打印三个 job ID。检查：
+partition 为每个 symbol 生成一个临时 Parquet，并按行数从大到小生成 array schedule，使重币先运行、
+减少尾部等待。每个 L2 task 只打开自己的一个输入文件；finalize 成功或质量拒绝后会验证并删除临时
+partition cache。检查进度：
 
 ```bash
 squeue -u pb24000367
-sacct -j <job-id> --format=JobID,State,Elapsed,MaxRSS,ExitCode
+/home/scc/pb24000367/Projects/bn/runtime/deploy/campus-107/processing-status.py
+find /home/scc/pb24000367/Projects/bn/runtime/status/processing/submissions \
+  -maxdepth 2 -type f -print
 ```
 
-必须从 formal start 所在的首个 partial UTC day 开始逐日提交。每个 L2 task 会生成日末
-`l2-checkpoint.json`，下一日用它继承连续盘口；如果本地已有前一天 `SEALED.json` 但尚无前一天
-`_PROCESSED.json` 或 `_QUALITY_REJECTED.json`，`submit-day.sh` 会拒绝乱序提交。质量拒绝表示该日
-已完整生成 L2 输出与 checkpoint，但不能进入成功样本；后续日仍可继续。L2 本身会拒绝续日缺少
-或身份不一致的前一日 checkpoint。
+必须从 formal start 日开始逐日处理。`next-date` 是 O(1) 调度游标；`date=...submitting` 表示提交在
+中途失败，scheduler 会停住而不是重复提交，检查已记录的 job ID 和 `sacct` 后才能人工处理。
+`_PROCESSED.json` 与 `_QUALITY_REJECTED.json` 都是终态，后者仍允许下一日继承 checkpoint。
+
+每个 L2 task 会生成日末 `l2-checkpoint.json`；缺少或身份不一致的前一日 checkpoint 会失败关闭。
 空 validity、损坏 checkpoint、区间重叠、越出目标 UTC 日、未分类时间、VALID/gap 冲突、任一币
 有效率低于 99.9%，或输入名单不等于 raw 权威 60 币都会使 finalize 失败，并写
 `_QUALITY_REJECTED.json`。成功后可检查：
@@ -206,7 +213,7 @@ sacct -j <job-id> --format=JobID,State,Elapsed,MaxRSS,ExitCode
 ```bash
 jq '{core_generation,candidate_revision,decision_sequence,universe_version,
      universe_hash,quality_policy,minimum_l2_valid_ratio}' \
-  /home/scc/pb24000367/Projects/bn/data/derived/quality/collector=tokyo01/date=2026-08-12/_PROCESSED.json
+  /home/scc/pb24000367/Projects/bn/data/derived/quality/collector=tokyo01/date=2026-08-23/_PROCESSED.json
 ```
 
 ## 8. 常见故障
@@ -217,6 +224,8 @@ jq '{core_generation,candidate_revision,decision_sequence,universe_version,
 - `rrsync` 拒绝命令：Vultr 仍有旧 SSH Match 配置，或客户端使用了服务端删除/覆盖参数；
 - `apptainer: command not found`：只使用绝对路径，不依赖 cron 中的 module；
 - overlay `invalid argument`：确认镜像是 `.sandbox` 且命令包含 `exec --writable`；
+- `submission already recorded`：正常幂等结果；若是 `.submitting`，先检查其中 job ID 与 `sacct`，
+  不要直接删除后重投；
 - `pull-once.sh: Permission denied`：重新运行当前 release installer，并检查 `stat -c '%A' runtime/pull-once.sh`；
 - raw 不增长：先看 `pull.log`，再看 `runtime/rsync/ready` 是否有 manifest，最后在 Vultr 检查
   collector 是否仍写 `ready/`。

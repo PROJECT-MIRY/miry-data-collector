@@ -21,6 +21,8 @@ def main() -> None:
         command.add_argument("--date", type=date.fromisoformat, required=True)
         if name == "l2":
             command.add_argument("--symbol", required=True)
+        if name == "normalize":
+            command.add_argument("--max-workers", type=int, default=1)
         if name == "finalize":
             command.add_argument("--symbols", required=True, help="comma-separated symbols")
     args = parser.parse_args()
@@ -31,7 +33,11 @@ def main() -> None:
         "utc_date": args.date,
     }
     if args.command == "normalize":
-        result = normalize_day(raw_root=args.raw_root, **common)
+        result = normalize_day(
+            raw_root=args.raw_root,
+            max_workers=args.max_workers,
+            **common,
+        )
         logging.info("normalization complete %s", result)
     elif args.command == "l2":
         changes, intervals = reconstruct_l2_day(exchange_symbol=args.symbol, **common)

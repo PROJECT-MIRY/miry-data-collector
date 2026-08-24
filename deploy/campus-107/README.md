@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.2
+## 2. 保留状态安装 v0.5.3
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
@@ -184,7 +184,7 @@ Vultr ACK 为准。
 前一 UTC 日的 `SEALED.json` 拉取后，scheduler 自动且仅一次提交：
 
 ```text
-normalize (1 CPU / 4GiB)
+normalize (4 parse workers + 1 ordered reducer / 24GiB)
   -> L2 input partition (2 CPU / 8GiB，一次扫描 typed)
   -> L2 array (60 tasks，最多 32 x 1 CPU / 4GiB)
   -> finalize (1 CPU / 2GiB)

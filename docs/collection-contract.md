@@ -1,4 +1,4 @@
-# v0.5.2 正式采集与处理合同
+# v0.5.3 正式采集与处理合同
 
 ## 本阶段目标
 
@@ -191,6 +191,10 @@ normalizer 从 sealed raw 的 `UNIVERSE_DECISION` 提取权威结构化版本、
 normalized typed 数据只允许在 L2 input 阶段扫描一次并按 symbol 分区；每个 L2 task 只能打开自己的
 单一 partition。array 按 partition 行数从大到小调度并最多并发 32 个单核 task，避免重币延迟到第二批
 形成长尾。partition 是可再生缓存，terminal finalize 后必须校验并删除，不属于长期 derived 合同。
+
+normalize 可并行执行每个独立 raw chunk 的 SHA、Parquet 解码、payload parse 与 typed 写入，但
+dedup、formal-start 和 universe reducer 必须按 sealed manifest 的原始顺序串行提交结果。
+`max_workers` 必须来自实测吞吐；当前 107 使用 4，不能因 CPU 空闲盲目提高到共享存储已饱和的 8。
 
 每币 expected window 在首日从 `FORMAL_COLLECTION_STARTED` 开始，其余日期覆盖完整 UTC 日。
 `_PROCESSED.json` 仅在以下条件全部满足时生成：

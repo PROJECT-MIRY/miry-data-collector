@@ -248,6 +248,72 @@ def test_normalizer_marks_market_overlap_replay(tmp_path: Path) -> None:
     ]
 
 
+def test_parallel_normalizer_matches_serial_cross_chunk_dedup(tmp_path: Path) -> None:
+    payload = orjson.dumps(
+        {
+            "e": "aggTrade",
+            "E": 1,
+            "T": 2,
+            "s": "BTCUSDT",
+            "a": 3,
+            "p": "100",
+            "q": "1",
+            "f": 4,
+            "l": 5,
+            "m": True,
+        }
+    )
+    events = [
+        _raw_event(
+            sequence=sequence,
+            stream_type=StreamType.AGG_TRADE,
+            received_ns=RECEIVED_NS + sequence,
+            payload=payload,
+            symbol="BTCUSDT",
+            connection_id=connection_id,
+        )
+        for sequence, connection_id in ((1, "old"), (2, "replacement"))
+    ]
+    raw_root, _derived_root = _write_day(
+        tmp_path,
+        event_groups=[[events[0]], [events[1]]],
+    )
+    serial_root = tmp_path / "serial"
+    parallel_root = tmp_path / "parallel"
+
+    serial = DayNormalizer(
+        raw_root=raw_root,
+        derived_root=serial_root,
+        collector_id="tokyo01",
+        utc_date=UTC_DATE,
+        max_workers=1,
+    ).run()
+    parallel = DayNormalizer(
+        raw_root=raw_root,
+        derived_root=parallel_root,
+        collector_id="tokyo01",
+        utc_date=UTC_DATE,
+        max_workers=2,
+    ).run()
+
+    assert parallel == serial
+    serial_files = sorted(
+        (serial_root / "typed/collector=tokyo01/date=2026-08-10").glob("*.parquet")
+    )
+    parallel_files = sorted(
+        (parallel_root / "typed/collector=tokyo01/date=2026-08-10").glob("*.parquet")
+    )
+    assert [path.name for path in parallel_files] == [path.name for path in serial_files]
+    for serial_path, parallel_path in zip(serial_files, parallel_files, strict=True):
+        assert pq.read_table(parallel_path).equals(pq.read_table(serial_path))
+    duplicate_flags = [
+        flag
+        for path in parallel_files
+        for flag in pq.read_table(path, columns=["is_duplicate"])["is_duplicate"].to_pylist()
+    ]
+    assert duplicate_flags == [False, True]
+
+
 def test_normalizer_rejects_conflicting_payload_for_same_exchange_id(tmp_path: Path) -> None:
     events = [
         _raw_event(
@@ -311,49 +377,54 @@ def _write_day(
     parquet_universe_hash: str | None = None,
     universe_hash_value: str = UNIVERSE_HASH,
     events: list[RawEvent] | None = None,
+    event_groups: list[list[RawEvent]] | None = None,
 ) -> tuple[Path, Path]:
     raw_root = tmp_path / "raw"
     derived_root = tmp_path / "derived"
     collector_root = raw_root / "collector=tokyo01"
-    event_rows = events or [_default_event()]
-    writer_group = event_rows[0].writer_group
-    assert all(event.writer_group is writer_group for event in event_rows)
-    relative = Path(f"date=2026-08-10/writer={writer_group.value}/chunk-test.parquet")
-    raw_path = collector_root / relative
-    raw_path.parent.mkdir(parents=True)
-    parquet_hash = parquet_universe_hash or universe_hash_value
-    metadata = {
-        b"chunk_id": b"chunk-test",
-        b"collector_id": b"tokyo01",
-        b"data_contract_hash": CONTRACT_HASH.encode(),
-        b"universe_hash": parquet_hash.encode(),
-        b"utc_date": UTC_DATE.isoformat().encode(),
-        b"writer_group": writer_group.value.encode(),
-    }
-    pq.write_table(raw_events_to_table(event_rows).replace_schema_metadata(metadata), raw_path)
-    event_count = len(event_rows) if manifest_event_count is None else manifest_event_count
-    manifest = ChunkManifest(
-        chunk_id="chunk-test",
-        data_path=relative.as_posix(),
-        sha256=sha256_file(raw_path),
-        size_bytes=raw_path.stat().st_size,
-        content_type=ContentType.PARQUET,
-        collector_id="tokyo01",
-        writer_group=writer_group,
-        utc_date=UTC_DATE,
-        event_count=event_count,
-        min_app_receive_realtime_ns=min(event.app_receive_realtime_ns for event in event_rows),
-        max_app_receive_realtime_ns=max(event.app_receive_realtime_ns for event in event_rows),
-        data_contract_hash=CONTRACT_HASH,
-        universe_hash=universe_hash_value,
-        created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
-    )
-    atomic_write_bytes(raw_path.with_suffix(".manifest.json"), canonical_json_bytes(manifest))
+    groups = event_groups or [events or [_default_event()]]
+    manifests = []
+    for index, event_rows in enumerate(groups):
+        writer_group = event_rows[0].writer_group
+        assert all(event.writer_group is writer_group for event in event_rows)
+        chunk_id = f"chunk-test-{index}"
+        relative = Path(f"date=2026-08-10/writer={writer_group.value}/{chunk_id}.parquet")
+        raw_path = collector_root / relative
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        parquet_hash = parquet_universe_hash or universe_hash_value
+        metadata = {
+            b"chunk_id": chunk_id.encode(),
+            b"collector_id": b"tokyo01",
+            b"data_contract_hash": CONTRACT_HASH.encode(),
+            b"universe_hash": parquet_hash.encode(),
+            b"utc_date": UTC_DATE.isoformat().encode(),
+            b"writer_group": writer_group.value.encode(),
+        }
+        pq.write_table(raw_events_to_table(event_rows).replace_schema_metadata(metadata), raw_path)
+        event_count = len(event_rows) if manifest_event_count is None else manifest_event_count
+        manifest = ChunkManifest(
+            chunk_id=chunk_id,
+            data_path=relative.as_posix(),
+            sha256=sha256_file(raw_path),
+            size_bytes=raw_path.stat().st_size,
+            content_type=ContentType.PARQUET,
+            collector_id="tokyo01",
+            writer_group=writer_group,
+            utc_date=UTC_DATE,
+            event_count=event_count,
+            min_app_receive_realtime_ns=min(event.app_receive_realtime_ns for event in event_rows),
+            max_app_receive_realtime_ns=max(event.app_receive_realtime_ns for event in event_rows),
+            data_contract_hash=CONTRACT_HASH,
+            universe_hash=universe_hash_value,
+            created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+        )
+        atomic_write_bytes(raw_path.with_suffix(".manifest.json"), canonical_json_bytes(manifest))
+        manifests.append(manifest)
     day = DayManifest(
         collector_id="tokyo01",
         utc_date=UTC_DATE,
         sealed_at=datetime(2026, 8, 11, tzinfo=UTC),
-        chunks=(manifest.as_ref(),),
+        chunks=tuple(manifest.as_ref() for manifest in manifests),
     )
     atomic_write_bytes(
         collector_root / "day-manifests/date=2026-08-10/SEALED.json",

@@ -28,6 +28,7 @@ set +a
 : "${MIRY_DERIVED_ROOT:?MIRY_DERIVED_ROOT is required}"
 : "${MIRY_COLLECTOR:?MIRY_COLLECTOR is required}"
 : "${MIRY_L2_CONCURRENCY:?MIRY_L2_CONCURRENCY is required}"
+: "${MIRY_NORMALIZE_WORKERS:?MIRY_NORMALIZE_WORKERS is required}"
 : "${MIRY_PROCESSING_START_DATE:?MIRY_PROCESSING_START_DATE is required}"
 : "${MIRY_SLURM_ACCOUNT:?MIRY_SLURM_ACCOUNT is required}"
 : "${MIRY_SLURM_PARTITION:?MIRY_SLURM_PARTITION is required}"
@@ -71,6 +72,16 @@ case "$MIRY_L2_CONCURRENCY" in
 esac
 if [ "$MIRY_L2_CONCURRENCY" -gt 32 ]; then
     echo "MIRY_L2_CONCURRENCY cannot exceed the 32 CPU allocation" >&2
+    exit 1
+fi
+case "$MIRY_NORMALIZE_WORKERS" in
+    *[!0-9]*|0|'')
+        echo "MIRY_NORMALIZE_WORKERS must be a positive integer" >&2
+        exit 1
+        ;;
+esac
+if [ "$MIRY_NORMALIZE_WORKERS" -gt 8 ]; then
+    echo "MIRY_NORMALIZE_WORKERS cannot exceed the measured 8-worker ceiling" >&2
     exit 1
 fi
 

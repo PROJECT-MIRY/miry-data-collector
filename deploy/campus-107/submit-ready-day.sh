@@ -18,7 +18,7 @@ set -a
 set +a
 for name in \
     MIRY_APPTAINER MIRY_DATA_IMAGE MIRY_RAW_ROOT MIRY_DERIVED_ROOT MIRY_COLLECTOR \
-    MIRY_L2_CONCURRENCY MIRY_PROCESSING_START_DATE MIRY_SLURM_ACCOUNT \
+    MIRY_L2_CONCURRENCY MIRY_NORMALIZE_WORKERS MIRY_PROCESSING_START_DATE MIRY_SLURM_ACCOUNT \
     MIRY_SLURM_PARTITION MIRY_SLURM_QOS
 do
     eval "value=\${$name-}"
@@ -33,6 +33,13 @@ case "$MIRY_L2_CONCURRENCY" in
 esac
 if [ "$MIRY_L2_CONCURRENCY" -gt 32 ]; then
     echo "MIRY_L2_CONCURRENCY cannot exceed the 32 CPU allocation" >&2
+    exit 1
+fi
+case "$MIRY_NORMALIZE_WORKERS" in
+    *[!0-9]*|0|'') echo "MIRY_NORMALIZE_WORKERS must be positive" >&2; exit 1 ;;
+esac
+if [ "$MIRY_NORMALIZE_WORKERS" -gt 8 ]; then
+    echo "MIRY_NORMALIZE_WORKERS cannot exceed the measured 8-worker ceiling" >&2
     exit 1
 fi
 today=${1:-$(date -u +%F)}

@@ -502,6 +502,7 @@ exit 1
                 f"MIRY_DERIVED_ROOT={tmp_path / 'derived'}",
                 "MIRY_COLLECTOR=tokyo01",
                 f"MIRY_L2_CONCURRENCY={concurrency}",
+                "MIRY_NORMALIZE_WORKERS=4",
                 "",
             )
         ),

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import multiprocessing
 import os
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -30,6 +32,20 @@ from miry.contracts.typed import TYPED_EVENT_SCHEMA
 from miry.pipeline.parsing import logical_identity, parse_typed_row
 
 DEDUP_WINDOW_NS = 600 * 1_000_000_000
+DEDUP_COLUMNS = (
+    "stream_type",
+    "exchange_symbol",
+    "payload_hash",
+    "app_receive_realtime_ns",
+    "aggregate_trade_id",
+    "trade_id",
+    "first_update_id",
+    "final_update_id",
+    "previous_final_update_id",
+    "update_id",
+    "exchange_event_time_ms",
+    "exchange_transaction_time_ms",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +56,24 @@ class NormalizeResult:
     output_files: int
 
 
+@dataclass(frozen=True, slots=True)
+class _ChunkJob:
+    raw_root: Path
+    derived_root: Path
+    collector_id: str
+    utc_date: date
+    manifest_json: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedChunk:
+    output_path: Path | None
+    raw_events: int
+    typed_events: int
+    formal_starts: tuple[tuple[int, bytes, str], ...]
+    universe_events: tuple[tuple[bytes, str], ...]
+
+
 class DayNormalizer:
     def __init__(
         self,
@@ -48,13 +82,19 @@ class DayNormalizer:
         derived_root: Path,
         collector_id: str,
         utc_date: date,
+        max_workers: int = 1,
     ) -> None:
+        if not 1 <= max_workers <= 32:
+            raise ValueError("normalize max_workers must be between 1 and 32")
+        self._raw_root = raw_root
+        self._derived_root = derived_root
         self._collector_root = raw_root / f"collector={collector_id}"
         self._output_root = (
             derived_root / "typed" / f"collector={collector_id}" / f"date={utc_date.isoformat()}"
         )
         self._utc_date = utc_date
         self._collector_id = collector_id
+        self._max_workers = max_workers
         self._day_start_ns = int(
             datetime.combine(utc_date, datetime.min.time(), UTC).timestamp() * 1_000_000_000
         )
@@ -70,54 +110,32 @@ class DayNormalizer:
         typed_count = 0
         duplicate_count = 0
         output_count = 0
+        manifests = tuple(
+            manifest
+            for manifest in sorted(
+                chunk_manifests,
+                key=lambda item: (item.min_app_receive_realtime_ns, item.chunk_id),
+            )
+            if manifest.content_type is ContentType.PARQUET
+        )
+        self._output_root.mkdir(parents=True, exist_ok=True)
+        for partial in self._output_root.glob(".*.typed.parquet.partial"):
+            partial.unlink()
 
-        for manifest in sorted(
-            chunk_manifests,
-            key=lambda item: (item.min_app_receive_realtime_ns, item.chunk_id),
-        ):
-            if manifest.content_type is not ContentType.PARQUET:
+        for parsed in self._parse_chunks(manifests):
+            raw_count += parsed.raw_events
+            typed_count += parsed.typed_events
+            formal_starts.extend(
+                (observed_ns, _formal_start_payload(payload), universe_hash)
+                for observed_ns, payload, universe_hash in parsed.formal_starts
+            )
+            universe_events.extend(
+                (UniverseDecision.model_validate_json(payload), universe_hash)
+                for payload, universe_hash in parsed.universe_events
+            )
+            if parsed.output_path is None:
                 continue
-            raw_path = self._collector_root / manifest.data_path
-            self._verify_chunk(raw_path, manifest)
-            output_path = self._output_root / f"{manifest.chunk_id}.typed.parquet"
-            rows: list[dict[str, Any]] = []
-            parquet = pq.ParquetFile(raw_path)
-            self._verify_parquet(parquet, manifest, raw_path)
-            for batch in parquet.iter_batches(batch_size=10_000):
-                for raw_row in batch.to_pylist():
-                    raw_count += 1
-                    stream_type = StreamType(str(raw_row["stream_type"]))
-                    if stream_type is StreamType.FORMAL_COLLECTION_STARTED:
-                        observed_ns = int(raw_row["app_receive_realtime_ns"])
-                        formal_starts.append(
-                            (
-                                observed_ns,
-                                _formal_start_payload(bytes(raw_row["payload_bytes"])),
-                                manifest.universe_hash,
-                            )
-                        )
-                    elif stream_type is StreamType.UNIVERSE_DECISION:
-                        decision = UniverseDecision.model_validate_json(
-                            bytes(raw_row["payload_bytes"])
-                        )
-                        universe_events.append((decision, manifest.universe_hash))
-                    typed = parse_typed_row(raw_row)
-                    if typed is None:
-                        continue
-                    identity = logical_identity(typed)
-                    if identity is not None:
-                        typed["is_duplicate"] = deduplicator.observe(
-                            identity,
-                            bytes(typed["payload_hash"]),
-                            int(typed["app_receive_realtime_ns"]),
-                        )
-                        if typed["is_duplicate"]:
-                            duplicate_count += 1
-                    rows.append(typed)
-                    typed_count += 1
-            if not rows:
-                continue
-            self._write_typed(output_path, rows)
+            duplicate_count += self._deduplicate_typed(parsed.output_path, deduplicator)
             output_count += 1
 
         result = NormalizeResult(raw_count, typed_count, duplicate_count, output_count)
@@ -170,6 +188,58 @@ class DayNormalizer:
         }
         atomic_write_bytes(self._output_root / "_NORMALIZED.json", canonical_json_bytes(marker))
         return result
+
+    def _parse_chunks(self, manifests: tuple[ChunkManifest, ...]) -> Any:
+        jobs = tuple(
+            _ChunkJob(
+                raw_root=self._raw_root,
+                derived_root=self._derived_root,
+                collector_id=self._collector_id,
+                utc_date=self._utc_date,
+                manifest_json=canonical_json_bytes(manifest),
+            )
+            for manifest in manifests
+        )
+        if self._max_workers == 1:
+            return map(_parse_chunk, jobs)
+        def parallel_results() -> Any:
+            with ProcessPoolExecutor(
+                max_workers=self._max_workers,
+                mp_context=multiprocessing.get_context("spawn"),
+                initializer=_initialize_worker,
+            ) as executor:
+                yield from executor.map(_parse_chunk, jobs, chunksize=1)
+
+        return parallel_results()
+
+    @staticmethod
+    def _deduplicate_typed(path: Path, deduplicator: _Deduplicator) -> int:
+        duplicate_rows: set[int] = set()
+        offset = 0
+        for batch in pq.ParquetFile(path).iter_batches(
+            batch_size=100_000,
+            columns=DEDUP_COLUMNS,
+        ):
+            for index, row in enumerate(batch.to_pylist(), start=offset):
+                identity = logical_identity(row)
+                if identity is not None and deduplicator.observe(
+                    identity,
+                    bytes(row["payload_hash"]),
+                    int(row["app_receive_realtime_ns"]),
+                ):
+                    duplicate_rows.add(index)
+            offset += batch.num_rows
+        if not duplicate_rows:
+            return 0
+        table = pq.read_table(path)
+        duplicate_column = pa.array(
+            (index in duplicate_rows for index in range(table.num_rows)),
+            type=pa.bool_(),
+        )
+        column_index = table.schema.get_field_index("is_duplicate")
+        table = table.set_column(column_index, "is_duplicate", duplicate_column)
+        DayNormalizer._write_typed_table(path, table)
+        return len(duplicate_rows)
 
     @staticmethod
     def _active_universe(
@@ -287,9 +357,13 @@ class DayNormalizer:
 
     @staticmethod
     def _write_typed(path: Path, rows: list[dict[str, Any]]) -> None:
+        table = pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA)
+        DayNormalizer._write_typed_table(path, table)
+
+    @staticmethod
+    def _write_typed_table(path: Path, table: pa.Table) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f".{path.name}.partial")
-        table = pa.Table.from_pylist(rows, schema=TYPED_EVENT_SCHEMA)
         pq.write_table(table, partial, compression="zstd", compression_level=3)
         with partial.open("rb") as source:
             os.fsync(source.fileno())
@@ -297,10 +371,64 @@ class DayNormalizer:
         fsync_directory(path.parent)
 
 
+def _initialize_worker() -> None:
+    pa.set_cpu_count(1)
+
+
+def _parse_chunk(job: _ChunkJob) -> _ParsedChunk:
+    manifest = ChunkManifest.model_validate_json(job.manifest_json)
+    normalizer = DayNormalizer(
+        raw_root=job.raw_root,
+        derived_root=job.derived_root,
+        collector_id=job.collector_id,
+        utc_date=job.utc_date,
+    )
+    raw_path = normalizer._collector_root / manifest.data_path
+    normalizer._verify_chunk(raw_path, manifest)
+    output_path = normalizer._output_root / f"{manifest.chunk_id}.typed.parquet"
+    rows: list[dict[str, Any]] = []
+    formal_starts = []
+    universe_events = []
+    raw_count = 0
+    parquet = pq.ParquetFile(raw_path)
+    normalizer._verify_parquet(parquet, manifest, raw_path)
+    for batch in parquet.iter_batches(batch_size=10_000):
+        for raw_row in batch.to_pylist():
+            raw_count += 1
+            stream_type = StreamType(str(raw_row["stream_type"]))
+            if stream_type is StreamType.FORMAL_COLLECTION_STARTED:
+                formal_starts.append(
+                    (
+                        int(raw_row["app_receive_realtime_ns"]),
+                        bytes(raw_row["payload_bytes"]),
+                        manifest.universe_hash,
+                    )
+                )
+            elif stream_type is StreamType.UNIVERSE_DECISION:
+                universe_events.append(
+                    (bytes(raw_row["payload_bytes"]), manifest.universe_hash)
+                )
+            typed = parse_typed_row(raw_row)
+            if typed is not None:
+                rows.append(typed)
+    if rows:
+        normalizer._write_typed(output_path, rows)
+    return _ParsedChunk(
+        output_path=output_path if rows else None,
+        raw_events=raw_count,
+        typed_events=len(rows),
+        formal_starts=tuple(formal_starts),
+        universe_events=tuple(universe_events),
+    )
+
+
 class _Deduplicator:
     def __init__(self) -> None:
-        self._seen: dict[str, tuple[bytes, int]] = {}
-        self._timeline: list[tuple[int, str]] = []
+        self._seen: dict[tuple[object, ...], tuple[bytes, int]] = {}
+        self._legacy_seen: dict[str, tuple[bytes, int]] = {}
+        self._timeline: list[tuple[int, int, tuple[object, ...]]] = []
+        self._legacy_timeline: list[tuple[int, str]] = []
+        self._sequence = 0
         self._watermark_ns = 0
 
     @classmethod
@@ -315,42 +443,63 @@ class _Deduplicator:
             key = str(item["identity_key"])
             payload_hash = bytes.fromhex(str(item["payload_hash"]))
             observed_ns = int(item["observed_ns"])
-            deduplicator._seen[key] = (payload_hash, observed_ns)
-            heapq.heappush(deduplicator._timeline, (observed_ns, key))
+            deduplicator._legacy_seen[key] = (payload_hash, observed_ns)
+            heapq.heappush(deduplicator._legacy_timeline, (observed_ns, key))
             deduplicator._watermark_ns = max(deduplicator._watermark_ns, observed_ns)
         return deduplicator
 
     def observe(self, identity: tuple[object, ...], payload_hash: bytes, observed_ns: int) -> bool:
         self._watermark_ns = max(self._watermark_ns, observed_ns)
         self._prune(self._watermark_ns - DEDUP_WINDOW_NS)
-        key = _identity_key(identity)
-        previous = self._seen.get(key)
+        previous = self._seen.get(identity)
+        legacy_key = None
+        if previous is None and self._legacy_seen:
+            legacy_key = _identity_key(identity)
+            previous = self._legacy_seen.get(legacy_key)
         if previous is not None and previous[0] != payload_hash:
+            key = legacy_key or _identity_key(identity)
             raise ValueError(f"conflicting payload for logical event identity {key}")
         duplicate = previous is not None
-        self._seen[key] = (payload_hash, observed_ns)
-        heapq.heappush(self._timeline, (observed_ns, key))
+        self._seen[identity] = (payload_hash, observed_ns)
+        self._sequence += 1
+        heapq.heappush(self._timeline, (observed_ns, self._sequence, identity))
         return duplicate
 
     def checkpoint(self, *, day_end_ns: int) -> dict[str, Any]:
         cutoff = day_end_ns - DEDUP_WINDOW_NS
+        by_key = {
+            key: (payload_hash, observed_ns)
+            for key, (payload_hash, observed_ns) in self._legacy_seen.items()
+            if observed_ns >= cutoff
+        }
+        for identity, (payload_hash, observed_ns) in self._seen.items():
+            if observed_ns < cutoff:
+                continue
+            key = _identity_key(identity)
+            existing = by_key.get(key)
+            if existing is None or observed_ns >= existing[1]:
+                by_key[key] = (payload_hash, observed_ns)
         entries = [
             {
                 "identity_key": key,
                 "payload_hash": payload_hash.hex(),
                 "observed_ns": observed_ns,
             }
-            for key, (payload_hash, observed_ns) in sorted(self._seen.items())
-            if observed_ns >= cutoff
+            for key, (payload_hash, observed_ns) in sorted(by_key.items())
         ]
         return {"schema_version": 1, "window_ns": DEDUP_WINDOW_NS, "entries": entries}
 
     def _prune(self, cutoff_ns: int) -> None:
         while self._timeline and self._timeline[0][0] < cutoff_ns:
-            observed_ns, key = heapq.heappop(self._timeline)
-            current = self._seen.get(key)
+            observed_ns, _sequence, identity = heapq.heappop(self._timeline)
+            current = self._seen.get(identity)
             if current is not None and current[1] == observed_ns:
-                del self._seen[key]
+                del self._seen[identity]
+        while self._legacy_timeline and self._legacy_timeline[0][0] < cutoff_ns:
+            observed_ns, key = heapq.heappop(self._legacy_timeline)
+            current = self._legacy_seen.get(key)
+            if current is not None and current[1] == observed_ns:
+                del self._legacy_seen[key]
 
 
 def _identity_key(identity: tuple[object, ...]) -> str:

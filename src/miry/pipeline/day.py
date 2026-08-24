@@ -12,13 +12,19 @@ from miry.pipeline.normalize import DayNormalizer, NormalizeResult
 
 
 def normalize_day(
-    *, raw_root: Path, derived_root: Path, collector_id: str, utc_date: date
+    *,
+    raw_root: Path,
+    derived_root: Path,
+    collector_id: str,
+    utc_date: date,
+    max_workers: int = 1,
 ) -> NormalizeResult:
     result = DayNormalizer(
         raw_root=raw_root,
         derived_root=derived_root,
         collector_id=collector_id,
         utc_date=utc_date,
+        max_workers=max_workers,
     ).run()
     build_transport_gap_ledger(
         raw_root=raw_root,

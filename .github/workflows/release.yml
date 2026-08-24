@@ -11,6 +11,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      IMAGE_REPOSITORY: ghcr.io/project-miry/miry-data-collector
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
@@ -24,18 +26,18 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ github.ref_name }}
           provenance: false
           sbom: false
       - uses: eWaterCycle/setup-apptainer@v2
         with:
           apptainer-version: 1.4.2
-      - run: apptainer build miry-data-collector.sif docker://ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}
+      - run: apptainer build miry-data-collector.sif docker://${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}
       - name: Prepare deployment artifacts
         run: |
           sha256sum miry-data-collector.sif > miry-data-collector.sif.sha256
           printf '%s\n' \
-            'ghcr.io/${{ github.repository }}@${{ steps.image.outputs.digest }}' \
+            '${{ env.IMAGE_REPOSITORY }}@${{ steps.image.outputs.digest }}' \
             > edge-image.txt
       - env:
           GH_TOKEN: ${{ github.token }}

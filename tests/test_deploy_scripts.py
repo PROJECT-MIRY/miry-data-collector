@@ -55,7 +55,7 @@ def test_project_and_release_identity_use_miry_name() -> None:
         "miry-data-symbols",
     }
     assert readme.startswith("# miry-data-collector\n")
-    assert "ghcr.io/${{ github.repository }}" in release
+    assert "IMAGE_REPOSITORY: ghcr.io/project-miry/miry-data-collector" in release
     assert "miry-data-collector.sif" in release
 
 

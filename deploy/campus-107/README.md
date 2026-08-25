@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.6
+## 2. 保留状态安装 v0.5.7
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
@@ -98,7 +98,11 @@ local_raw_root: /home/scc/pb24000367/Projects/bn/data/raw
 local_staging_root: /home/scc/pb24000367/Projects/bn/runtime/rsync
 client_key: /home/scc/pb24000367/.ssh/miry-data-puller
 known_hosts: /home/scc/pb24000367/.ssh/miry-data-collector.known_hosts
+parallel_downloads: 4
 ```
+
+`parallel_downloads: 4` 表示先同步一份 manifest inventory，再用最多 4 条 SSH/rsync 连接下载互斥
+chunk。它不是四次完整镜像；SHA、原子落盘和 ACK 仍只执行一次。取值范围为 1--8，正式值固定为 4。
 
 `runtime/deploy/campus-107/processing.env` 应使用绝对 Apptainer 路径、writable sandbox、上述
 raw/derived、`tokyo01`、正式起始日 `2026-08-22`、`Students` partition、`stu` account 和

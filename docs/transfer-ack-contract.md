@@ -45,6 +45,10 @@ SHA-256 和批次 ID；重启恢复可能重复写同一个确定性 `event_id`�
 `REMOTE_GC` 才删除 transaction。若进程在中间退出，新进程启动时先恢复 transaction，再执行
 日 seal 和采集启动。
 
+ready 下载可使用最多 4 条并行 rsync lane，但每个 `data_path` 在单轮中只属于一个 lane。inventory
+和全部 lane 完成前不得进入本地 ingest 或 ACK；任一 lane 失败只保留 staging/partial，不能授权
+远端 GC。ACK 上传仍是单一有序阶段。
+
 单个损坏 ACK、文件名不匹配、真正未知的 chunk 或 hash mismatch 不再终止 collector，也不会删除 ready。
 它们被原子移动到 `rejected-acks`，状态变为 `attention` 并写结构化错误事件。损坏 ready manifest
 同样不会让 storage task 崩溃；对应数据保持在 spool，等待人工处理，磁盘保护线仍然生效。

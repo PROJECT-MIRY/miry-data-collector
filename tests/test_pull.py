@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import BinaryIO
@@ -19,7 +20,7 @@ from miry.contracts.models import (
 )
 from miry.contracts.serde import canonical_json_bytes, sha256_bytes
 from miry.pipeline.config import PullConfig
-from miry.pipeline.pull import Puller, RsyncTransport
+from miry.pipeline.pull import Puller, RsyncTransport, safe_remote_root
 from miry.transfer import TransferJournal
 
 HASH = "a" * 64
@@ -191,6 +192,110 @@ def test_rsync_transport_pins_ssh_identity_and_host_key(
     assert b'"event":"ACK_PUSHED"' in next(
         (tmp_path / "transfer-ledger").rglob("events.jsonl")
     ).read_bytes()
+
+
+def test_rsync_transport_partitions_chunks_across_four_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _pull_config(tmp_path).model_copy(update={"parallel_downloads": 4})
+    transport = RsyncTransport(config)
+    inventory = config.local_staging_root / "inventory/ready"
+    stale = config.local_staging_root / "ready/stale.parquet"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale staging")
+    _remote, base = _remote_fixture(b"unused")
+    expected: set[str] = set()
+    lane_paths: list[set[str]] = []
+    barrier = threading.Barrier(4)
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def run(_self: RsyncTransport, *arguments: str) -> None:
+        nonlocal active, max_active
+        if "--delete-excluded" in arguments:
+            for index, size in enumerate((90, 80, 70, 60, 50, 40, 30, 20)):
+                data_path = f"date=2026-08-10/writer=depth/chunk-{index}.parquet"
+                manifest = base.model_copy(
+                    update={
+                        "chunk_id": f"chunk-{index:04d}",
+                        "data_path": data_path,
+                        "sha256": f"{index + 1:064x}",
+                        "size_bytes": size,
+                    }
+                )
+                path = inventory / Path(data_path).with_suffix(".manifest.json")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(canonical_json_bytes(manifest))
+                expected.add(data_path)
+            return
+        files_from = next(
+            value.removeprefix("--files-from=")
+            for value in arguments
+            if value.startswith("--files-from=")
+        )
+        paths = set(Path(files_from).read_text(encoding="utf-8").splitlines())
+        with lock:
+            lane_paths.append(paths)
+            active += 1
+            max_active = max(max_active, active)
+        barrier.wait(timeout=1)
+        with lock:
+            active -= 1
+
+    monkeypatch.setattr(RsyncTransport, "_run", run)
+
+    transport.pull_ready()
+
+    assert max_active == 4
+    assert not stale.exists()
+    assert len(tuple((config.local_staging_root / "ready").rglob("*.manifest.json"))) == 8
+    assert len(lane_paths) == 4
+    assert set().union(*lane_paths) == expected
+    assert sum(len(paths) for paths in lane_paths) == len(expected)
+    lane_bytes = sorted(
+        sum(
+            ChunkManifest.model_validate_json(
+                (inventory / Path(path).with_suffix(".manifest.json")).read_bytes()
+            ).size_bytes
+            for path in paths
+        )
+        for paths in lane_paths
+    )
+    assert lane_bytes[-1] - lane_bytes[0] <= 20
+
+
+def test_parallel_rsync_failure_keeps_existing_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _pull_config(tmp_path).model_copy(update={"parallel_downloads": 2})
+    transport = RsyncTransport(config)
+    staged = config.local_staging_root / "ready/stale.parquet"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"keep until a complete remote inventory is downloaded")
+    inventory = config.local_staging_root / "inventory/ready"
+    _remote, manifest = _remote_fixture(b"unused")
+
+    def run(_self: RsyncTransport, *arguments: str) -> None:
+        if "--delete-excluded" in arguments:
+            path = inventory / "date=2026-08-10/writer=depth/chunk-test.manifest.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(canonical_json_bytes(manifest))
+            return
+        raise OSError("simulated lane failure")
+
+    monkeypatch.setattr(RsyncTransport, "_run", run)
+
+    with pytest.raises(OSError, match="simulated lane failure"):
+        transport.pull_ready()
+
+    assert staged.read_bytes() == b"keep until a complete remote inventory is downloaded"
+
+
+@pytest.mark.parametrize("value", ("", "ready\nother", "ready\x00other"))
+def test_remote_roots_reject_control_characters(value: str) -> None:
+    with pytest.raises(ValueError, match="remote paths must be relative"):
+        safe_remote_root(value)
 
 
 def test_pull_cli_persists_success_status_and_transfer_ledger(

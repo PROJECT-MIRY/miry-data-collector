@@ -1,9 +1,9 @@
-# v0.5.6 正式采集与处理合同
+# v0.5.7 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.6 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.7 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -129,18 +129,21 @@ ticker 响应的 SHA-256。该事件时间之后的数据属于正式实验。24
 
 107 每分钟执行一个短生命周期任务：
 
-1. 用固定私钥和 known_hosts 将 Vultr `ready/` rsync 到 `runtime/rsync/ready`；
-2. 读取 manifest，将数据写入 `.partial`，fsync，校验 size 与 SHA-256；
-3. 原子 rename 到 `data/raw/collector=<id>/...`，再持久化本地 manifest；
-4. 生成 ACK 并 rsync 到 Vultr `control/acks/`；
-5. Vultr 只有在 ACK 的 chunk ID 和 SHA-256 都匹配后才删除 ready 数据。
+1. 用固定私钥和 known_hosts 单独同步 Vultr `ready/` 的 manifest/SEALED inventory；
+2. 按 manifest 的 `size_bytes` 将互斥 `data_path` 均衡分配给最多 4 条并行 rsync lane；
+3. 所有 lane 成功后读取 manifest，将数据写入 `.partial`，fsync，校验 size 与 SHA-256；
+4. 原子 rename 到 `data/raw/collector=<id>/...`，再持久化本地 manifest；
+5. 生成 ACK 并 rsync 到 Vultr `control/acks/`；
+6. Vultr 只有在 ACK 的 chunk ID 和 SHA-256 都匹配后才删除 ready 数据。
 
 两端必须持久记录 `LOCAL_DURABLE`、`ACK_PUSHED`、`ACK_VALIDATED` 和 `REMOTE_GC`；Vultr 删除
 ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 只能隔离和报警，不能删除 ready
 或终止全部采集。详细合同见 [ACK 传输审计](transfer-ack-contract.md)。
 
-禁止使用 `--remove-source-files`。暂存镜像不是永久数据，下一次同步可删除已从 Vultr GC 的
-镜像文件；`data/raw` 才是 107 上的永久原始数据。
+lane 只允许读取互斥 files-from 清单，不能并发执行多个完整 `ready/` 镜像或共享删除阶段。任一 lane
+失败时本轮不进入 ingest/ACK，已下载 partial 和旧 staging 保留到下一次重试。禁止使用
+`--remove-source-files`。暂存镜像不是永久数据，下一次成功同步可删除已从 Vultr GC 的镜像文件；
+`data/raw` 才是 107 上的永久原始数据。
 
 ## 1C1G 性能合同
 

@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -130,17 +131,119 @@ class RsyncTransport:
         return FilesystemRemoteStore(self._mirror)
 
     def pull_ready(self) -> None:
+        started = time.monotonic()
         destination = self._mirror / self._ready_root
         destination.mkdir(parents=True, exist_ok=True)
+        inventory = self._mirror / "inventory" / self._ready_root
+        inventory.mkdir(parents=True, exist_ok=True)
         self._run(
             "--archive",
             "--delete-delay",
+            "--delete-excluded",
             "--delay-updates",
             "--no-links",
             "--partial",
+            "--include=*/",
+            "--include=*.manifest.json",
+            "--include=SEALED.json",
+            "--exclude=*",
+            self._remote(f"{self._ready_root}/"),
+            f"{inventory}/",
+        )
+        downloads = self._inventory_downloads(inventory)
+        lanes = partition_downloads(downloads, self._config.parallel_downloads)
+        lane_root = self._mirror / "control" / "download-lanes"
+        lane_root.mkdir(parents=True, exist_ok=True)
+        for stale in lane_root.glob("lane-*.txt"):
+            stale.unlink()
+        lane_lists = []
+        for index, lane in enumerate(lanes):
+            path = lane_root / f"lane-{index}.txt"
+            atomic_write_bytes(path, "".join(f"{value}\n" for value in lane).encode())
+            lane_lists.append(path)
+        if lane_lists:
+            with ThreadPoolExecutor(
+                max_workers=len(lane_lists), thread_name_prefix="rsync-ready"
+            ) as executor:
+                futures = [
+                    executor.submit(self._pull_lane, path, destination)
+                    for path in lane_lists
+                ]
+                for future in futures:
+                    future.result()
+        self._publish_inventory(
+            inventory,
+            destination,
+            expected_data=set(downloads),
+        )
+        logger.info(
+            "ready sync complete manifests=%d lanes=%d planned_bytes=%d "
+            "duration_seconds=%.3f",
+            len(downloads),
+            len(lanes),
+            sum(downloads.values()),
+            time.monotonic() - started,
+        )
+
+    def _pull_lane(self, files_from: Path, destination: Path) -> None:
+        self._run(
+            "--archive",
+            "--recursive",
+            "--no-links",
+            "--partial",
+            f"--files-from={files_from}",
             self._remote(f"{self._ready_root}/"),
             f"{destination}/",
         )
+
+    @staticmethod
+    def _inventory_downloads(inventory: Path) -> dict[str, int]:
+        downloads: dict[str, int] = {}
+        for path in sorted(inventory.rglob("*.manifest.json")):
+            if any(part.startswith(".") for part in path.relative_to(inventory).parts):
+                continue
+            manifest = ChunkManifest.model_validate_json(path.read_bytes())
+            data_path = safe_remote_root(manifest.data_path)
+            if not data_path:
+                raise ValueError(f"manifest has an empty data path: {path}")
+            if data_path in downloads:
+                raise ValueError(f"duplicate manifest data path: {data_path}")
+            downloads[data_path] = manifest.size_bytes
+        return downloads
+
+    @staticmethod
+    def _publish_inventory(
+        inventory: Path,
+        destination: Path,
+        *,
+        expected_data: set[str],
+    ) -> None:
+        metadata = {
+            path.relative_to(inventory).as_posix(): path
+            for path in inventory.rglob("*")
+            if path.is_file()
+            and not any(part.startswith(".") for part in path.relative_to(inventory).parts)
+        }
+        expected = expected_data | metadata.keys()
+        for relative, source in metadata.items():
+            target = destination / relative
+            content = source.read_bytes()
+            if target.exists() and target.read_bytes() == content:
+                continue
+            atomic_write_bytes(target, content)
+        for path in tuple(destination.rglob("*")):
+            if path.is_file() and path.relative_to(destination).as_posix() not in expected:
+                path.unlink()
+        directories = sorted(
+            (path for path in destination.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for path in directories:
+            try:
+                path.rmdir()
+            except OSError:
+                pass
 
     def push_acks(self, *, run_id: str, journal: TransferJournal) -> AckPushResult:
         source = self._mirror / self._ack_root
@@ -243,6 +346,21 @@ class RsyncTransport:
 
     def _remote(self, path: str) -> str:
         return f"{self._config.username}@{self._config.host}:{path}"
+
+
+def partition_downloads(
+    downloads: dict[str, int], lane_limit: int
+) -> tuple[tuple[str, ...], ...]:
+    lane_count = min(lane_limit, len(downloads))
+    if lane_count == 0:
+        return ()
+    lanes: list[list[str]] = [[] for _ in range(lane_count)]
+    sizes = [0] * lane_count
+    for path, size in sorted(downloads.items(), key=lambda value: (-value[1], value[0])):
+        lane = min(range(lane_count), key=lambda index: (sizes[index], index))
+        lanes[lane].append(path)
+        sizes[lane] += size
+    return tuple(tuple(paths) for paths in lanes)
 
 
 class Puller:
@@ -367,7 +485,12 @@ class Puller:
 
 def safe_remote_root(value: str) -> str:
     path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts:
+    if (
+        not value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or path.is_absolute()
+        or ".." in path.parts
+    ):
         raise ValueError("remote paths must be relative to the restricted rsync root")
     return value.rstrip("/")
 

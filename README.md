@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.6 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.7 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -185,3 +185,8 @@ SHA、schema、Decimal、去重、checkpoint 校验保持不变。08-24 真实�
 两组 Arrow 表逐文件一致。进一步在同一 `32 CPU / 128GiB` allocation 上用 974 万事件比较
 4/8/16/31 workers，均值分别为 `105.30s`、`104.11s`、`103.34s`、`107.81s`；16 workers 的
 不足 2% 改善不值得占用 17 CPU，31 workers 已回退，因此生产 normalize 保持 4 workers。
+
+v0.5.7 将 107 的单连接 ready 镜像改为 4 条互斥 rsync lane：先同步 manifest/SEALED inventory，
+再按 chunk 字节数做确定性 LPT 分配，所有 lane 成功后才进入原有 SHA、fsync、原子发布和 ACK。
+任一 lane 失败不会清理已有 staging 或授权 Vultr GC。相同 60 秒公网 A/B 中，1/2/4 连接总吞吐为
+`0.694/1.131/1.712 MB/s`，4 连接相对单连接提高约 147%。

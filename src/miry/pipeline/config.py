@@ -20,6 +20,7 @@ class PullConfig(BaseModel):
     local_staging_root: Path
     connect_timeout_seconds: int = Field(default=20, ge=1, le=120)
     io_timeout_seconds: int = Field(default=120, ge=30, le=900)
+    parallel_downloads: int = Field(default=4, ge=1, le=8)
     rsync_binary: Path = Path("/usr/bin/rsync")
     ssh_binary: Path = Path("/usr/bin/ssh")
 

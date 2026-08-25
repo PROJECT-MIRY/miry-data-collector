@@ -9,5 +9,6 @@ local_raw_root: /home/scc/pb24000367/Projects/bn/data/raw
 local_staging_root: /home/scc/pb24000367/Projects/bn/runtime/rsync
 connect_timeout_seconds: 20
 io_timeout_seconds: 120
+parallel_downloads: 4
 rsync_binary: /usr/bin/rsync
 ssh_binary: /usr/bin/ssh

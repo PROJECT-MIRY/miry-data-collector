@@ -199,7 +199,10 @@ normalized typed 数据只允许在 L2 input 阶段扫描一次并按 symbol 分
 
 normalize 可并行执行每个独立 raw chunk 的 SHA、Parquet 解码、payload parse 与 typed 写入，但
 dedup、formal-start 和 universe reducer 必须按 sealed manifest 的原始顺序串行提交结果。
-`max_workers` 必须来自实测吞吐；当前 107 使用 4，不能因 CPU 空闲盲目提高到共享存储已饱和的 8。
+`max_workers` 必须来自实测吞吐。v0.5.6 在同一 `32 CPU / 128GiB` allocation、同一 974 万事件
+混合样本上的 4/8/16/31 workers 均值为 `105.30s`、`104.11s`、`103.34s`、`107.81s`。16 workers
+相对 4 的改善不足 2%，31 workers 已因 ordered reducer 和共享存储竞争回退；当前 107 保持 4，
+32 核配额用于可按 symbol 线性并行的 L2 array。
 reducer 按列读取 identity 字段，并以 1 秒 bucket 维护精确 10 分钟去重窗口；同一秒内最多执行一次
 expiry prune。normalizer 只解码解析所需 raw 列，typed Parquet 使用 zstd level 1，所有 typed 文件
 原子 rename 完成后执行一次目录 durability barrier。这些优化不能省略 chunk SHA、Parquet schema、

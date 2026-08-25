@@ -182,4 +182,6 @@ v0.5.6 优化 107 normalize 的串行 reducer 和逐行解析：raw Parquet 只�
 Parquet 使用 zstd level 1，并把目录 fsync 合并为完成后的单一 barrier。4 parse workers 和全部
 SHA、schema、Decimal、去重、checkpoint 校验保持不变。08-24 真实交易样本由 `113.26s` 降到
 `86.15s`（快 23.9%），depth/trades/metadata 混合样本由 `70.23s` 降到 `57.03s`（快 18.8%）；
-两组 Arrow 表逐文件一致。
+两组 Arrow 表逐文件一致。进一步在同一 `32 CPU / 128GiB` allocation 上用 974 万事件比较
+4/8/16/31 workers，均值分别为 `105.30s`、`104.11s`、`103.34s`、`107.81s`；16 workers 的
+不足 2% 改善不值得占用 17 CPU，31 workers 已回退，因此生产 normalize 保持 4 workers。

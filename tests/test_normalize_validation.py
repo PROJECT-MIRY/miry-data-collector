@@ -370,6 +370,16 @@ def test_dedup_checkpoint_carries_overlap_identity_across_midnight(tmp_path: Pat
     assert first.checkpoint(day_end_ns=day_end_ns)["window_ns"] == DEDUP_WINDOW_NS
 
 
+def test_deduplicator_preserves_exact_window_boundary() -> None:
+    identity = (StreamType.AGG_TRADE, "BTCUSDT", 123)
+    payload_hash = b"x" * 32
+    deduplicator = _Deduplicator()
+
+    assert deduplicator.observe(identity, payload_hash, 0) is False
+    assert deduplicator.observe(identity, payload_hash, DEDUP_WINDOW_NS) is True
+    assert deduplicator.observe(identity, payload_hash, 2 * DEDUP_WINDOW_NS + 1) is False
+
+
 def _write_day(
     tmp_path: Path,
     *,

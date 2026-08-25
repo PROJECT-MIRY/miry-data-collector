@@ -1,9 +1,9 @@
-# v0.5.5 正式采集与处理合同
+# v0.5.6 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.5 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.6 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -200,6 +200,10 @@ normalized typed 数据只允许在 L2 input 阶段扫描一次并按 symbol 分
 normalize 可并行执行每个独立 raw chunk 的 SHA、Parquet 解码、payload parse 与 typed 写入，但
 dedup、formal-start 和 universe reducer 必须按 sealed manifest 的原始顺序串行提交结果。
 `max_workers` 必须来自实测吞吐；当前 107 使用 4，不能因 CPU 空闲盲目提高到共享存储已饱和的 8。
+reducer 按列读取 identity 字段，并以 1 秒 bucket 维护精确 10 分钟去重窗口；同一秒内最多执行一次
+expiry prune。normalizer 只解码解析所需 raw 列，typed Parquet 使用 zstd level 1，所有 typed 文件
+原子 rename 完成后执行一次目录 durability barrier。这些优化不能省略 chunk SHA、Parquet schema、
+Decimal、payload conflict、跨日 checkpoint 或 unknown stream 校验。
 
 每币 expected window 在首日从 `FORMAL_COLLECTION_STARTED` 开始，其余日期覆盖完整 UTC 日。
 `_PROCESSED.json` 仅在以下条件全部满足时生成：

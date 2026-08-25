@@ -29,9 +29,10 @@ from miry.contracts.serde import (
     sha256_file,
 )
 from miry.contracts.typed import TYPED_EVENT_SCHEMA
-from miry.pipeline.parsing import logical_identity, parse_typed_row
+from miry.pipeline.parsing import parse_typed_row
 
 DEDUP_WINDOW_NS = 600 * 1_000_000_000
+DEDUP_BUCKET_NS = 1_000_000_000
 DEDUP_COLUMNS = (
     "stream_type",
     "exchange_symbol",
@@ -45,6 +46,16 @@ DEDUP_COLUMNS = (
     "update_id",
     "exchange_event_time_ms",
     "exchange_transaction_time_ms",
+)
+RAW_PARSE_COLUMNS = (
+    "exchange_symbol",
+    "stream_type",
+    "connection_id",
+    "receive_seq",
+    "app_receive_realtime_ns",
+    "app_receive_monotonic_ns",
+    "payload_bytes",
+    "request_realtime_ns",
 )
 
 
@@ -138,6 +149,7 @@ class DayNormalizer:
             duplicate_count += self._deduplicate_typed(parsed.output_path, deduplicator)
             output_count += 1
 
+        fsync_directory(self._output_root)
         result = NormalizeResult(raw_count, typed_count, duplicate_count, output_count)
         atomic_write_bytes(
             self._output_root / "_DEDUP_CHECKPOINT.json",
@@ -202,6 +214,7 @@ class DayNormalizer:
         )
         if self._max_workers == 1:
             return map(_parse_chunk, jobs)
+
         def parallel_results() -> Any:
             with ProcessPoolExecutor(
                 max_workers=self._max_workers,
@@ -220,12 +233,42 @@ class DayNormalizer:
             batch_size=100_000,
             columns=DEDUP_COLUMNS,
         ):
-            for index, row in enumerate(batch.to_pylist(), start=offset):
-                identity = logical_identity(row)
+            columns = {
+                name: batch.column(name).to_pylist() for name in DEDUP_COLUMNS
+            }
+            values = zip(*(columns[name] for name in DEDUP_COLUMNS), strict=True)
+            for index, row in enumerate(values, start=offset):
+                (
+                    stream_type,
+                    exchange_symbol,
+                    payload_hash,
+                    observed_ns,
+                    aggregate_trade_id,
+                    trade_id,
+                    first_update_id,
+                    final_update_id,
+                    previous_final_update_id,
+                    update_id,
+                    exchange_event_time_ms,
+                    exchange_transaction_time_ms,
+                ) = row
+                identity = _logical_identity(
+                    str(stream_type),
+                    str(exchange_symbol),
+                    bytes(payload_hash),
+                    aggregate_trade_id,
+                    trade_id,
+                    first_update_id,
+                    final_update_id,
+                    previous_final_update_id,
+                    update_id,
+                    exchange_event_time_ms,
+                    exchange_transaction_time_ms,
+                )
                 if identity is not None and deduplicator.observe(
                     identity,
-                    bytes(row["payload_hash"]),
-                    int(row["app_receive_realtime_ns"]),
+                    bytes(payload_hash),
+                    int(observed_ns),
                 ):
                     duplicate_rows.add(index)
             offset += batch.num_rows
@@ -364,11 +407,10 @@ class DayNormalizer:
     def _write_typed_table(path: Path, table: pa.Table) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f".{path.name}.partial")
-        pq.write_table(table, partial, compression="zstd", compression_level=3)
+        pq.write_table(table, partial, compression="zstd", compression_level=1)
         with partial.open("rb") as source:
             os.fsync(source.fileno())
         partial.replace(path)
-        fsync_directory(path.parent)
 
 
 def _initialize_worker() -> None:
@@ -392,11 +434,11 @@ def _parse_chunk(job: _ChunkJob) -> _ParsedChunk:
     raw_count = 0
     parquet = pq.ParquetFile(raw_path)
     normalizer._verify_parquet(parquet, manifest, raw_path)
-    for batch in parquet.iter_batches(batch_size=10_000):
+    for batch in parquet.iter_batches(batch_size=10_000, columns=RAW_PARSE_COLUMNS):
         for raw_row in batch.to_pylist():
             raw_count += 1
-            stream_type = StreamType(str(raw_row["stream_type"]))
-            if stream_type is StreamType.FORMAL_COLLECTION_STARTED:
+            stream_type = str(raw_row["stream_type"])
+            if stream_type == StreamType.FORMAL_COLLECTION_STARTED.value:
                 formal_starts.append(
                     (
                         int(raw_row["app_receive_realtime_ns"]),
@@ -404,7 +446,7 @@ def _parse_chunk(job: _ChunkJob) -> _ParsedChunk:
                         manifest.universe_hash,
                     )
                 )
-            elif stream_type is StreamType.UNIVERSE_DECISION:
+            elif stream_type == StreamType.UNIVERSE_DECISION.value:
                 universe_events.append(
                     (bytes(raw_row["payload_bytes"]), manifest.universe_hash)
                 )
@@ -426,9 +468,12 @@ class _Deduplicator:
     def __init__(self) -> None:
         self._seen: dict[tuple[object, ...], tuple[bytes, int]] = {}
         self._legacy_seen: dict[str, tuple[bytes, int]] = {}
-        self._timeline: list[tuple[int, int, tuple[object, ...]]] = []
-        self._legacy_timeline: list[tuple[int, str]] = []
-        self._sequence = 0
+        self._buckets: dict[int, list[tuple[tuple[object, ...], int]]] = {}
+        self._bucket_heap: list[int] = []
+        self._legacy_buckets: dict[int, list[tuple[str, int]]] = {}
+        self._legacy_bucket_heap: list[int] = []
+        self._pruned_through_bucket = -1
+        self._next_prune_cutoff_ns = DEDUP_BUCKET_NS
         self._watermark_ns = 0
 
     @classmethod
@@ -444,25 +489,31 @@ class _Deduplicator:
             payload_hash = bytes.fromhex(str(item["payload_hash"]))
             observed_ns = int(item["observed_ns"])
             deduplicator._legacy_seen[key] = (payload_hash, observed_ns)
-            heapq.heappush(deduplicator._legacy_timeline, (observed_ns, key))
+            deduplicator._schedule_legacy(key, observed_ns)
             deduplicator._watermark_ns = max(deduplicator._watermark_ns, observed_ns)
+        deduplicator._prune(deduplicator._watermark_ns - DEDUP_WINDOW_NS)
         return deduplicator
 
     def observe(self, identity: tuple[object, ...], payload_hash: bytes, observed_ns: int) -> bool:
         self._watermark_ns = max(self._watermark_ns, observed_ns)
-        self._prune(self._watermark_ns - DEDUP_WINDOW_NS)
+        cutoff_ns = self._watermark_ns - DEDUP_WINDOW_NS
+        if cutoff_ns >= self._next_prune_cutoff_ns:
+            self._prune(cutoff_ns)
         previous = self._seen.get(identity)
+        if previous is not None and previous[1] < cutoff_ns:
+            previous = None
         legacy_key = None
         if previous is None and self._legacy_seen:
             legacy_key = _identity_key(identity)
             previous = self._legacy_seen.get(legacy_key)
+            if previous is not None and previous[1] < cutoff_ns:
+                previous = None
         if previous is not None and previous[0] != payload_hash:
             key = legacy_key or _identity_key(identity)
             raise ValueError(f"conflicting payload for logical event identity {key}")
         duplicate = previous is not None
         self._seen[identity] = (payload_hash, observed_ns)
-        self._sequence += 1
-        heapq.heappush(self._timeline, (observed_ns, self._sequence, identity))
+        self._schedule(identity, observed_ns)
         return duplicate
 
     def checkpoint(self, *, day_end_ns: int) -> dict[str, Any]:
@@ -490,16 +541,99 @@ class _Deduplicator:
         return {"schema_version": 1, "window_ns": DEDUP_WINDOW_NS, "entries": entries}
 
     def _prune(self, cutoff_ns: int) -> None:
-        while self._timeline and self._timeline[0][0] < cutoff_ns:
-            observed_ns, _sequence, identity = heapq.heappop(self._timeline)
-            current = self._seen.get(identity)
-            if current is not None and current[1] == observed_ns:
-                del self._seen[identity]
-        while self._legacy_timeline and self._legacy_timeline[0][0] < cutoff_ns:
-            observed_ns, key = heapq.heappop(self._legacy_timeline)
-            current = self._legacy_seen.get(key)
-            if current is not None and current[1] == observed_ns:
-                del self._legacy_seen[key]
+        expired_through = cutoff_ns // DEDUP_BUCKET_NS - 1
+        if expired_through <= self._pruned_through_bucket:
+            return
+        self._pruned_through_bucket = expired_through
+        self._next_prune_cutoff_ns = (expired_through + 2) * DEDUP_BUCKET_NS
+        while self._bucket_heap and self._bucket_heap[0] <= expired_through:
+            bucket = heapq.heappop(self._bucket_heap)
+            for identity, observed_ns in self._buckets.pop(bucket):
+                current = self._seen.get(identity)
+                if current is not None and current[1] == observed_ns:
+                    del self._seen[identity]
+        while self._legacy_bucket_heap and self._legacy_bucket_heap[0] <= expired_through:
+            bucket = heapq.heappop(self._legacy_bucket_heap)
+            for key, observed_ns in self._legacy_buckets.pop(bucket):
+                current = self._legacy_seen.get(key)
+                if current is not None and current[1] == observed_ns:
+                    del self._legacy_seen[key]
+
+    def _schedule(self, identity: tuple[object, ...], observed_ns: int) -> None:
+        bucket = observed_ns // DEDUP_BUCKET_NS
+        values = self._buckets.get(bucket)
+        if values is None:
+            values = []
+            self._buckets[bucket] = values
+            heapq.heappush(self._bucket_heap, bucket)
+        values.append((identity, observed_ns))
+
+    def _schedule_legacy(self, key: str, observed_ns: int) -> None:
+        bucket = observed_ns // DEDUP_BUCKET_NS
+        values = self._legacy_buckets.get(bucket)
+        if values is None:
+            values = []
+            self._legacy_buckets[bucket] = values
+            heapq.heappush(self._legacy_bucket_heap, bucket)
+        values.append((key, observed_ns))
+
+
+def _logical_identity(
+    stream: str,
+    symbol: str,
+    payload_hash: bytes,
+    aggregate_trade_id: int | None,
+    trade_id: int | None,
+    first_update_id: int | None,
+    final_update_id: int | None,
+    previous_final_update_id: int | None,
+    update_id: int | None,
+    exchange_event_time_ms: int | None,
+    exchange_transaction_time_ms: int | None,
+) -> tuple[object, ...] | None:
+    if stream == StreamType.AGG_TRADE.value:
+        return stream, symbol, _required_int(aggregate_trade_id, "aggregate_trade_id")
+    if stream == StreamType.TRADE.value:
+        return stream, symbol, _required_int(trade_id, "trade_id")
+    if stream in {StreamType.DEPTH.value, StreamType.RPI_DEPTH.value}:
+        return (
+            stream,
+            symbol,
+            _required_int(first_update_id, "first_update_id"),
+            _required_int(final_update_id, "final_update_id"),
+            _required_int(previous_final_update_id, "previous_final_update_id"),
+        )
+    if stream == StreamType.BOOK_TICKER.value:
+        return stream, symbol, _required_int(update_id, "update_id")
+    if stream == StreamType.MARK_PRICE.value:
+        return (
+            stream,
+            symbol,
+            _required_int(exchange_event_time_ms, "exchange_event_time_ms"),
+            payload_hash,
+        )
+    if stream == StreamType.FORCE_ORDER.value:
+        return (
+            stream,
+            symbol,
+            _required_int(exchange_event_time_ms, "exchange_event_time_ms"),
+            _required_int(exchange_transaction_time_ms, "exchange_transaction_time_ms"),
+            payload_hash,
+        )
+    if stream == StreamType.CONTRACT_INFO.value:
+        return (
+            stream,
+            symbol,
+            _required_int(exchange_event_time_ms, "exchange_event_time_ms"),
+            payload_hash,
+        )
+    return None
+
+
+def _required_int(value: int | None, label: str) -> int:
+    if value is None:
+        raise ValueError(f"typed dedup identity has no {label}")
+    return value
 
 
 def _identity_key(identity: tuple[object, ...]) -> str:

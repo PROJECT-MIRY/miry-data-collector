@@ -24,24 +24,35 @@ TYPED_STREAMS = frozenset(
         StreamType.CLOCK_SAMPLE,
     }
 )
+TYPED_STREAM_VALUES = frozenset(stream.value for stream in TYPED_STREAMS)
+STREAM_VALUES = frozenset(stream.value for stream in StreamType)
+OBJECT_STREAM_VALUES = frozenset(
+    {
+        StreamType.EXCHANGE_INFO.value,
+        StreamType.DAILY_KLINES.value,
+        StreamType.LIQUIDITY_DEPTH.value,
+        StreamType.FORMAL_COLLECTION_STARTED.value,
+        StreamType.UNIVERSE_DECISION.value,
+        StreamType.WS_CONTROL.value,
+    }
+)
+DEPTH_STREAM_VALUES = frozenset({StreamType.DEPTH.value, StreamType.RPI_DEPTH.value})
+DEPTH_SNAPSHOT_STREAM_VALUES = frozenset(
+    {StreamType.DEPTH_SNAPSHOT.value, StreamType.RPI_DEPTH_SNAPSHOT.value}
+)
+TRADE_STREAM_VALUES = frozenset({StreamType.AGG_TRADE.value, StreamType.TRADE.value})
 
 
 def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
-    stream = StreamType(str(raw_row["stream_type"]))
-    if stream not in TYPED_STREAMS:
+    stream = str(raw_row["stream_type"])
+    if stream not in STREAM_VALUES:
+        raise ValueError(f"{stream!r} is not a valid StreamType")
+    if stream not in TYPED_STREAM_VALUES:
         value = orjson.loads(bytes(raw_row["payload_bytes"]))
-        if stream is StreamType.MARKET_TICKERS and not isinstance(value, list):
+        if stream == StreamType.MARKET_TICKERS.value and not isinstance(value, list):
             raise ValueError("market tickers payload must be an array")
-        object_streams = {
-            StreamType.EXCHANGE_INFO,
-            StreamType.DAILY_KLINES,
-            StreamType.LIQUIDITY_DEPTH,
-            StreamType.FORMAL_COLLECTION_STARTED,
-            StreamType.UNIVERSE_DECISION,
-            StreamType.WS_CONTROL,
-        }
-        if stream in object_streams and not isinstance(value, dict):
-            raise ValueError(f"{stream.value} payload must be an object")
+        if stream in OBJECT_STREAM_VALUES and not isinstance(value, dict):
+            raise ValueError(f"{stream} payload must be an object")
         return None
     payload = _json_object(bytes(raw_row["payload_bytes"]))
     data = payload.get("data", payload)
@@ -49,13 +60,13 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("Binance event data must be an object")
     symbol_value = raw_row.get("exchange_symbol") or _event_symbol(data)
     symbol = str(symbol_value).upper() if symbol_value else None
-    if not symbol and stream is not StreamType.CLOCK_SAMPLE:
-        raise ValueError(f"{stream.value} event has no symbol")
+    if not symbol and stream != StreamType.CLOCK_SAMPLE.value:
+        raise ValueError(f"{stream} event has no symbol")
 
     row: dict[str, Any] = {
         "schema_version": 1,
         "exchange_symbol": symbol,
-        "stream_type": stream.value,
+        "stream_type": stream,
         "connection_id": str(raw_row["connection_id"]),
         "receive_seq": int(raw_row["receive_seq"]),
         "app_receive_realtime_ns": int(raw_row["app_receive_realtime_ns"]),
@@ -67,7 +78,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
         "is_duplicate": False,
     }
 
-    if stream in {StreamType.DEPTH, StreamType.RPI_DEPTH}:
+    if stream in DEPTH_STREAM_VALUES:
         _require_event(data, "depthUpdate")
         row.update(
             exchange_event_time_ms=_int(data, "E"),
@@ -78,7 +89,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             bids=_levels(data, "b"),
             asks=_levels(data, "a"),
         )
-    elif stream in {StreamType.DEPTH_SNAPSHOT, StreamType.RPI_DEPTH_SNAPSHOT}:
+    elif stream in DEPTH_SNAPSHOT_STREAM_VALUES:
         row.update(
             exchange_event_time_ms=_optional_int(data, "E"),
             exchange_transaction_time_ms=_optional_int(data, "T"),
@@ -86,7 +97,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             bids=_levels(data, "bids"),
             asks=_levels(data, "asks"),
         )
-    elif stream is StreamType.BOOK_TICKER:
+    elif stream == StreamType.BOOK_TICKER.value:
         _require_event(data, "bookTicker")
         row.update(
             exchange_event_time_ms=_int(data, "E"),
@@ -97,8 +108,11 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             ask_price=_decimal(data, "a"),
             ask_quantity=_decimal(data, "A", allow_zero=True),
         )
-    elif stream in {StreamType.AGG_TRADE, StreamType.TRADE}:
-        _require_event(data, "aggTrade" if stream is StreamType.AGG_TRADE else "trade")
+    elif stream in TRADE_STREAM_VALUES:
+        _require_event(
+            data,
+            "aggTrade" if stream == StreamType.AGG_TRADE.value else "trade",
+        )
         row.update(
             exchange_event_time_ms=_int(data, "E"),
             exchange_transaction_time_ms=_int(data, "T"),
@@ -106,7 +120,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             quantity=_decimal(data, "q"),
             buyer_is_maker=_bool(data, "m"),
         )
-        if stream is StreamType.AGG_TRADE:
+        if stream == StreamType.AGG_TRADE.value:
             row.update(
                 aggregate_trade_id=_int(data, "a"),
                 first_trade_id=_int(data, "f"),
@@ -115,7 +129,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             )
         else:
             row["trade_id"] = _int(data, "t")
-    elif stream is StreamType.MARK_PRICE:
+    elif stream == StreamType.MARK_PRICE.value:
         _require_event(data, "markPriceUpdate")
         row.update(
             exchange_event_time_ms=_int(data, "E"),
@@ -125,7 +139,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             funding_rate=_decimal(data, "r", allow_zero=True, allow_negative=True),
             next_funding_time_ms=_int(data, "T"),
         )
-    elif stream is StreamType.FORCE_ORDER:
+    elif stream == StreamType.FORCE_ORDER.value:
         _require_event(data, "forceOrder")
         order = data.get("o")
         if not isinstance(order, dict):
@@ -143,7 +157,7 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             last_filled_quantity=_decimal(order, "l", allow_zero=True),
             accumulated_filled_quantity=_decimal(order, "z", allow_zero=True),
         )
-    elif stream is StreamType.CONTRACT_INFO:
+    elif stream == StreamType.CONTRACT_INFO.value:
         _require_event(data, "contractInfo")
         row.update(
             exchange_event_time_ms=_int(data, "E"),
@@ -152,12 +166,12 @@ def parse_typed_row(raw_row: dict[str, Any]) -> dict[str, Any] | None:
             onboard_date_ms=_int(data, "ot"),
             contract_status=str(data["cs"]),
         )
-    elif stream is StreamType.OPEN_INTEREST:
+    elif stream == StreamType.OPEN_INTEREST.value:
         row.update(
             exchange_event_time_ms=_int(data, "time"),
             open_interest=_decimal(data, "openInterest", allow_zero=True),
         )
-    elif stream is StreamType.CLOCK_SAMPLE:
+    elif stream == StreamType.CLOCK_SAMPLE.value:
         row["exchange_event_time_ms"] = _int(data, "serverTime")
     return row
 
@@ -260,6 +274,26 @@ def _decimal(
     return str(value)
 
 
+def _level_decimal(
+    raw: object,
+    label: str,
+    *,
+    allow_zero: bool = False,
+    allow_negative: bool = False,
+) -> str:
+    try:
+        value = Decimal(str(raw))
+    except InvalidOperation as exc:
+        raise ValueError(f"{label} must be a decimal") from exc
+    if not value.is_finite():
+        raise ValueError(f"{label} must be finite")
+    if value < 0 and not allow_negative:
+        raise ValueError(f"{label} cannot be negative")
+    if value == 0 and not allow_zero:
+        raise ValueError(f"{label} must be positive")
+    return str(value)
+
+
 def _levels(data: dict[str, Any], key: str) -> list[dict[str, str]]:
     raw_levels = data.get(key)
     if not isinstance(raw_levels, list):
@@ -268,11 +302,10 @@ def _levels(data: dict[str, Any], key: str) -> list[dict[str, str]]:
     for level in raw_levels:
         if not isinstance(level, list) or len(level) < 2:
             raise ValueError(f"invalid level in {key}")
-        values = {"p": level[0], "q": level[1]}
         levels.append(
             {
-                "price": _decimal(values, "p"),
-                "quantity": _decimal(values, "q", allow_zero=True),
+                "price": _level_decimal(level[0], "p"),
+                "quantity": _level_decimal(level[1], "q", allow_zero=True),
             }
         )
     return levels

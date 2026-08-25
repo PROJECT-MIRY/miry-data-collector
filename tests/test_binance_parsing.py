@@ -645,6 +645,16 @@ def test_market_wide_payload_is_valid_discovery_evidence(
     )
 
 
+def test_typed_parser_rejects_unknown_raw_stream() -> None:
+    with pytest.raises(ValueError, match="not a valid StreamType"):
+        parse_typed_row(
+            {
+                "stream_type": "unexpected",
+                "payload_bytes": b"{}",
+            }
+        )
+
+
 def test_edge_depth_decode_reuses_parsed_sequence_fields() -> None:
     decoded = decode_websocket(
         orjson.dumps(

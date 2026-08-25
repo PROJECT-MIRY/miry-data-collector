@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.5 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.6 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -176,3 +176,10 @@ rotation 时关闭。网络或 Binance 仍可能断开单条连接，但可恢�
 v0.5.5 补齐迁移失败后的收敛路径：裁剪失败时先恢复最后提交的 route assignment，再继续限幅均衡；
 正式成员更新失败时只保持变更 symbol 的 planned gap OPEN，并在 30/60/120/300 秒退避下后台重试。
 UTC 日封存、其余稳定成员和 collector 进程不再受该可恢复错误影响。
+
+v0.5.6 优化 107 normalize 的串行 reducer 和逐行解析：raw Parquet 只解码实际使用列，stream 使用
+预校验字符串分派，去重改为列式扫描和 1 秒 expiry bucket，盘口价位不再创建临时校验字典；typed
+Parquet 使用 zstd level 1，并把目录 fsync 合并为完成后的单一 barrier。4 parse workers 和全部
+SHA、schema、Decimal、去重、checkpoint 校验保持不变。08-24 真实交易样本由 `113.26s` 降到
+`86.15s`（快 23.9%），depth/trades/metadata 混合样本由 `70.23s` 降到 `57.03s`（快 18.8%）；
+两组 Arrow 表逐文件一致。

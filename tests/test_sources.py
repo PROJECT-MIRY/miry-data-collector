@@ -404,6 +404,9 @@ async def test_source_manager_moves_symbols_in_add_ready_remove_phases() -> None
     expanded: set[str] = set()
 
     class PlannedSharder:
+        def copy(self) -> PlannedSharder:
+            return self
+
         def shards(self, _instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
             return (("AUSDT", "CUSDT"), ("BUSDT", "DUSDT"))
 
@@ -477,6 +480,13 @@ async def test_source_manager_rebalances_once_with_complete_traffic_evidence() -
     manager._config = SimpleNamespace(public_connection_shards=2)
     manager._traffic = CompleteTraffic()
     manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+    manager._public_sharder = TrafficSharder(2, CompleteTraffic().effective_rates())
+    manager._public_sharder._assignments = {  # type: ignore[attr-defined]
+        "AUSDT": 0,
+        "BUSDT": 0,
+        "CUSDT": 1,
+        "DUSDT": 1,
+    }
     public_0 = RecordingRoute(("AUSDT", "BUSDT"))
     public_1 = RecordingRoute(("CUSDT", "DUSDT"))
     manager._routes = {"public-0": public_0, "public-1": public_1}
@@ -499,6 +509,9 @@ async def test_source_manager_rebalances_once_with_complete_traffic_evidence() -
 @pytest.mark.asyncio
 async def test_source_manager_rolls_back_expansion_before_any_trim_on_failure() -> None:
     class PlannedSharder:
+        def copy(self) -> PlannedSharder:
+            return self
+
         def shards(self, _instruments: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
             return (("AUSDT", "CUSDT"), ("BUSDT", "DUSDT"))
 
@@ -568,6 +581,12 @@ async def test_source_manager_keeps_expanded_coverage_when_trim_fails() -> None:
     manager._traffic = CompleteTraffic()
     manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
     old_sharder = TrafficSharder(2, CompleteTraffic().effective_rates())
+    old_sharder._assignments = {  # type: ignore[attr-defined]
+        "AUSDT": 0,
+        "BUSDT": 0,
+        "CUSDT": 1,
+        "DUSDT": 1,
+    }
     manager._public_sharder = old_sharder
     public_0 = RecordingRoute(("AUSDT", "BUSDT"), fail_trim=True)
     public_1 = RecordingRoute(("CUSDT", "DUSDT"))
@@ -580,6 +599,11 @@ async def test_source_manager_keeps_expanded_coverage_when_trim_fails() -> None:
     assert public_0.instruments == ("AUSDT", "BUSDT", "CUSDT")
     assert public_1.instruments == ("AUSDT", "DUSDT")
     assert manager._public_sharder is old_sharder
+
+    public_0.fail_trim = False
+    assert await manager.rebalance_public_routes()
+    assert public_0.instruments == ("AUSDT", "BUSDT")
+    assert public_1.instruments == ("CUSDT", "DUSDT")
 
 
 @pytest.mark.asyncio

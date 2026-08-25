@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.4 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.5 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -172,3 +172,7 @@ v0.5.4 将 public route 流量重平衡移出 UTC 日切关键路径，继承当
 一对 symbol 的批次持续收敛；每小时重评最近 24 个完整块，高水位或连接恢复期间暂停。控制 ACK
 deadline 从请求实际开始执行后计时，receiver 定期让出事件循环，raw admission 只在 writer
 rotation 时关闭。网络或 Binance 仍可能断开单条连接，但可恢复迁移失败不再终止整个 collector。
+
+v0.5.5 补齐迁移失败后的收敛路径：裁剪失败时先恢复最后提交的 route assignment，再继续限幅均衡；
+正式成员更新失败时只保持变更 symbol 的 planned gap OPEN，并在 30/60/120/300 秒退避下后台重试。
+UTC 日封存、其余稳定成员和 collector 进程不再受该可恢复错误影响。

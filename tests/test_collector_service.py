@@ -37,6 +37,17 @@ class RebalanceTimeoutSources(OnlineSources):
         raise SourceUpdateError("subscription update acknowledgement timed out")
 
 
+class MembershipTimeoutSources(OnlineSources):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_updates = True
+
+    async def update_instruments(self, members: tuple[str, ...]) -> None:
+        self.updates.append(members)
+        if self.fail_updates:
+            raise SourceUpdateError("membership subscription update timed out")
+
+
 class StorageSources:
     def __init__(self, *, running: bool, ready_error: BaseException | None = None) -> None:
         self.running = running
@@ -271,6 +282,47 @@ async def test_one_symbol_change_only_marks_changed_symbols() -> None:
 
 
 @pytest.mark.asyncio
+async def test_membership_timeout_keeps_only_changed_gap_open_and_seals_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous_members = _members()
+    next_members = tuple(sorted((*previous_members[:-1], "NEWUSDT")))
+    previous = FakeDecision(members=previous_members, universe_hash="a" * 64)
+    decision = FakeDecision(members=next_members, universe_hash="b" * 64)
+    service = _service(previous, decision)
+    sources = MembershipTimeoutSources()
+    service._sources = sources
+
+    await service._apply_midnight_boundary(datetime(2026, 8, 11, tzinfo=UTC))
+
+    assert not service._stop.is_set()
+    assert service._pending_membership == (
+        next_members,
+        "gap-boundary",
+        ("NEWUSDT", previous_members[-1]),
+    )
+    assert service._gaps.closed_symbols == []  # type: ignore[attr-defined]
+    assert service._day_index.seals == [date(2026, 8, 10)]  # type: ignore[attr-defined]
+
+    original_close = service._gaps.close  # type: ignore[attr-defined]
+
+    async def close_and_stop(*args: object, **kwargs: object) -> None:
+        await original_close(*args, **kwargs)
+        service._stop.set()
+
+    sources.fail_updates = False
+    service._gaps.close = close_and_stop  # type: ignore[attr-defined]
+    monkeypatch.setattr("miry.collector.service.MEMBERSHIP_RETRY_SECONDS", (0,))
+
+    await asyncio.wait_for(service._membership_loop(), timeout=0.5)
+
+    assert service._pending_membership is None
+    assert service._gaps.closed_symbols == [  # type: ignore[attr-defined]
+        ("NEWUSDT", previous_members[-1])
+    ]
+
+
+@pytest.mark.asyncio
 async def test_recovered_storage_gap_does_not_restart_running_sources() -> None:
     service = _storage_service(
         SpoolStatus(used_bytes=100, free_bytes=1_000, hard_limited=False),
@@ -349,6 +401,8 @@ def _service(previous: object, decision: object | None) -> Any:
     service._queues = SimpleNamespace(utilization=0.0)
     service._stop = asyncio.Event()
     service._rebalance_requested = asyncio.Event()
+    service._membership_requested = asyncio.Event()
+    service._pending_membership = None
     service._writers = SimpleNamespace(metrics=SimpleNamespace(durable_through_ns=1))
     service._service_started_ns = 1
     service._control_events = []

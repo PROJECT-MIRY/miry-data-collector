@@ -47,3 +47,9 @@ v0.5.4 将流量校准移到独立 background loop。UTC writer rotate、univers
 
 这些修改不改变正式 60 币、raw schema、gap schema、universe identity、rsync/ACK 或 107 派生合同。
 Vultr 和 107 均采用保留状态升级，历史 gap 仍作为研究有效区间的排除依据。
+
+## v0.5.5 收敛补丁
+
+上线复核补充了两个恢复不变量：裁剪阶段失败后，下一次维护先恢复最后提交的 route assignment，
+不能把临时重复覆盖当成新的合法分片；正式成员更新失败时，日切不终止 collector，而是让变更 symbol
+的 planned gap 保持 OPEN 并后台重试。该补丁不改变上面的根因归类或数据合同。

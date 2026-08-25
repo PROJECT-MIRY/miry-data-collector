@@ -1,9 +1,9 @@
-# v0.5.4 正式采集与处理合同
+# v0.5.5 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.4 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.5 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -92,7 +92,9 @@ public route 每小时使用最近 24 个完整小时的实际消息峰值评估
 最大最小差时才搬迁。单批最多交换一对 symbol，成功后冷却 5 分钟并继续评估直到收敛；raw queue
 达到 50% 或任一 public route 正在恢复时暂停。迁移复用同一两阶段交接，不重启 collector，也不
 产生 universe generation 或 `PLANNED_BOUNDARY_GAP`。交接期可能有可去重的重复 raw，但不会先退订
-形成未登记空窗。成员实际变化同样继承现有 route，只为退出/进入成员改变订阅，再由限幅循环校准。
+形成未登记空窗。裁剪失败时保留扩展覆盖，route 恢复后先收敛到最后提交的 assignment，再继续限幅
+均衡。成员实际变化同样继承现有 route，只为退出/进入成员改变订阅；失败时 changed-symbol planned
+gap 保持 OPEN，并按 30/60/120/300 秒退避后台重试，不阻断 UTC 日封存。
 
 WebSocket 30 秒无任何消息会重连整个异常连接。每个币的 `depth` 与 `bookTicker` 分别以 30 秒
 保守阈值监控，`markPrice@1s` 以 15 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已

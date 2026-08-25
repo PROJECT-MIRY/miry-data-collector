@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 PUBLIC_REBALANCE_INTERVAL_SECONDS = 3_600
 PUBLIC_REBALANCE_COOLDOWN_SECONDS = 300
 PUBLIC_REBALANCE_RETRY_SECONDS = (30, 60, 120)
+MEMBERSHIP_RETRY_SECONDS = (30, 60, 120, 300)
 
 
 class CollectorService:
@@ -47,6 +48,10 @@ class CollectorService:
         self._operation_lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._rebalance_requested = asyncio.Event()
+        self._membership_requested = asyncio.Event()
+        self._pending_membership: (
+            tuple[tuple[str, ...], str | None, tuple[str, ...]] | None
+        ) = None
 
         self._spool = SpoolManager(
             config.data_root,
@@ -151,6 +156,7 @@ class CollectorService:
         background = [
             asyncio.create_task(self._storage_loop(), name="storage-monitor"),
             asyncio.create_task(self._midnight_loop(), name="utc-midnight-rotation"),
+            asyncio.create_task(self._membership_loop(), name="universe-membership-recovery"),
             asyncio.create_task(self._rebalance_loop(), name="public-route-rebalance"),
             asyncio.create_task(self._stats_loop(), name="collector-stats"),
             asyncio.create_task(self._writers.wait_for_failure(), name="writer-health"),
@@ -324,6 +330,45 @@ class CollectorService:
             )
             return None
 
+    async def _membership_loop(self) -> None:
+        while not self._stop.is_set():
+            await self._membership_requested.wait()
+            self._membership_requested.clear()
+            attempt = 0
+            while self._pending_membership is not None and not self._stop.is_set():
+                delay = MEMBERSHIP_RETRY_SECONDS[min(attempt, len(MEMBERSHIP_RETRY_SECONDS) - 1)]
+                await _wait_event(self._stop, delay)
+                if self._stop.is_set():
+                    return
+                pending = self._pending_membership
+                if pending is None:
+                    break
+                if not self._sources.running or not self._sources.ready_for_rebalance:
+                    attempt += 1
+                    continue
+                members, gap_id, changed = pending
+                try:
+                    await self._sources.update_instruments(members)
+                except SourceUpdateError as exc:
+                    attempt += 1
+                    logger.warning(
+                        "universe membership update incomplete retry=%d error=%r",
+                        attempt,
+                        exc,
+                    )
+                    continue
+                if gap_id is not None:
+                    await self._gaps.close(
+                        gap_id,
+                        GapReason.PLANNED_BOUNDARY,
+                        exchange_symbols=changed,
+                        detail="new subscriptions, L2 snapshots, and first OI samples are ready",
+                    )
+                if self._pending_membership == pending:
+                    self._pending_membership = None
+                self._rebalance_requested.set()
+                logger.info("universe membership update recovered changed=%d", len(changed))
+
     async def _apply_midnight_boundary(self, midnight: datetime) -> None:
         previous = self._universe_store.active
         was_running = self._sources.running
@@ -348,8 +393,17 @@ class CollectorService:
         if decision is not None:
             self._gaps.set_universe_hash(active.universe_hash)
             if was_running:
-                await self._sources.update_instruments(active.members)
-            if boundary_gap is not None:
+                try:
+                    await self._sources.update_instruments(active.members)
+                except SourceUpdateError as exc:
+                    self._pending_membership = (active.members, boundary_gap, changed)
+                    self._membership_requested.set()
+                    logger.warning(
+                        "universe membership update deferred; changed-symbol gap remains open "
+                        "error=%r",
+                        exc,
+                    )
+            if boundary_gap is not None and self._pending_membership is None:
                 await self._gaps.close(
                     boundary_gap,
                     GapReason.PLANNED_BOUNDARY,

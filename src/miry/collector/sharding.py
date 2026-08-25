@@ -81,6 +81,11 @@ class TrafficSharder:
         }
         return tuple(tuple(sorted(shard)) for shard in shards)
 
+    def copy(self) -> TrafficSharder:
+        copied = TrafficSharder(self._count, self._message_rates)
+        copied._assignments = dict(self._assignments)
+        return copied
+
     def _message_rate(self, symbol: str) -> int:
         if symbol in self._message_rates:
             return self._message_rates[symbol]

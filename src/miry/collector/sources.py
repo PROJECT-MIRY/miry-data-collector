@@ -145,7 +145,8 @@ class SourceManager:
         if self._task is None or self._pollers is None:
             raise RuntimeError("sources are not running")
         async with self._update_lock:
-            shards = self._public_sharder.shards(instruments)
+            sharder = self._public_sharder.copy()
+            shards = sharder.shards(instruments)
             plans = self._public_route_plans(shards)
             plans.extend(
                 (
@@ -158,6 +159,7 @@ class SourceManager:
                 )
             )
             await _add_ready_remove(plans)
+            self._public_sharder = sharder
             self._instruments = instruments
 
     async def rebalance_public_routes(self) -> bool:
@@ -171,13 +173,15 @@ class SourceManager:
                     "public route rebalance skipped: 24 complete traffic blocks unavailable"
                 )
                 return False
+            committed_shards = self._public_sharder.shards(self._instruments)
+            current_shards = self._current_public_shards()
+            if current_shards != committed_shards:
+                await _add_ready_remove(self._public_route_plans(committed_shards))
+                logger.info("public routes reconciled to committed assignment")
+                return True
             sharder = TrafficSharder(
                 self._config.public_connection_shards,
                 self._traffic.effective_rates(),
-            )
-            current_shards = tuple(
-                self._routes[f"public-{index}"].instruments
-                for index in range(self._config.public_connection_shards)
             )
             shards = sharder.rebalance(self._instruments, current_shards)
             changed = await _add_ready_remove(self._public_route_plans(shards))
@@ -187,6 +191,12 @@ class SourceManager:
             else:
                 logger.info("public route rebalance skipped: assignment unchanged")
             return changed
+
+    def _current_public_shards(self) -> tuple[tuple[str, ...], ...]:
+        return tuple(
+            self._routes[f"public-{index}"].instruments
+            for index in range(self._config.public_connection_shards)
+        )
 
     def _public_route_plans(
         self, shards: tuple[tuple[str, ...], ...]

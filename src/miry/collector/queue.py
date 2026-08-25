@@ -101,23 +101,22 @@ class ByteBoundedQueues:
 
     async def put(self, event: RawEvent) -> None:
         reserved = event.approximate_size_bytes
-        async with self._condition:
-            if reserved > self.max_bytes or self._used_bytes + reserved > self.max_bytes:
-                self._hard_rejections += 1
-                raise QueueOverloaded(
-                    f"raw queue hard limit: used={self._used_bytes} incoming={reserved} "
-                    f"max={self.max_bytes}"
-                )
-            self._used_bytes += reserved
-            self._used_bytes_by_group[event.writer_group] += reserved
-            self._high_water_bytes = max(self._high_water_bytes, self._used_bytes)
-            self._interval_high_water_bytes = max(
-                self._interval_high_water_bytes, self._used_bytes
+        if reserved > self.max_bytes or self._used_bytes + reserved > self.max_bytes:
+            self._hard_rejections += 1
+            raise QueueOverloaded(
+                f"raw queue hard limit: used={self._used_bytes} incoming={reserved} "
+                f"max={self.max_bytes}"
             )
-            if not self._above_warn and self._used_bytes >= self.warn_bytes:
-                self._above_warn = True
-                self._warn_crossings += 1
-            self._last_event_monotonic[event.writer_group] = time.monotonic()
+        self._used_bytes += reserved
+        self._used_bytes_by_group[event.writer_group] += reserved
+        self._high_water_bytes = max(self._high_water_bytes, self._used_bytes)
+        self._interval_high_water_bytes = max(
+            self._interval_high_water_bytes, self._used_bytes
+        )
+        if not self._above_warn and self._used_bytes >= self.warn_bytes:
+            self._above_warn = True
+            self._warn_crossings += 1
+        self._last_event_monotonic[event.writer_group] = time.monotonic()
         self._queues[event.writer_group].put_nowait(QueuedEvent(event, reserved))
 
     async def get(self, group: WriterGroup) -> WriterItem:

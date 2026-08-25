@@ -1,6 +1,6 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.5.1 collector。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.5.4 collector。数据根为
 `/srv/miry-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
 
 ## 1. 前置条件
@@ -85,7 +85,7 @@ queue 为 192MiB。`message_rates` 的单位是每分钟 public WebSocket 消息
 在 `/etc/miry-data-collector/edge.env` 中写 immutable digest：
 
 ```text
-EDGE_IMAGE=ghcr.io/50829/miry-data-collector@sha256:<release-digest>
+EDGE_IMAGE=ghcr.io/project-miry/miry-data-collector@sha256:<release-digest>
 EDGE_DATA_ROOT=/srv/miry-data-rsync
 EDGE_CONFIG=/etc/miry-data-collector/edge.yaml
 ```

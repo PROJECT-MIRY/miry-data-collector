@@ -27,6 +27,10 @@ from miry.universe.models import DiscoverySnapshot
 logger = logging.getLogger(__name__)
 
 
+class SourceUpdateError(RuntimeError):
+    pass
+
+
 class SourceManager:
     def __init__(
         self,
@@ -65,6 +69,18 @@ class SourceManager:
     @property
     def running(self) -> bool:
         return self._task is not None
+
+    @property
+    def ready_for_rebalance(self) -> bool:
+        return (
+            self._task is not None
+            and self._stop is not None
+            and not self._stop.is_set()
+            and all(
+                self._routes[f"public-{index}"].ready
+                for index in range(self._config.public_connection_shards)
+            )
+        )
 
     def raise_if_failed(self) -> None:
         if self._task is None or not self._task.done():
@@ -125,19 +141,11 @@ class SourceManager:
         self._routes = {}
         self._pollers = None
 
-    async def update_instruments(
-        self, instruments: tuple[str, ...], *, rebalance_public: bool = False
-    ) -> None:
+    async def update_instruments(self, instruments: tuple[str, ...]) -> None:
         if self._task is None or self._pollers is None:
             raise RuntimeError("sources are not running")
         async with self._update_lock:
-            sharder = self._public_sharder
-            if rebalance_public and self._traffic.has_complete_evidence:
-                sharder = TrafficSharder(
-                    self._config.public_connection_shards,
-                    self._traffic.effective_rates(),
-                )
-            shards = sharder.shards(instruments)
+            shards = self._public_sharder.shards(instruments)
             plans = self._public_route_plans(shards)
             plans.extend(
                 (
@@ -150,13 +158,14 @@ class SourceManager:
                 )
             )
             await _add_ready_remove(plans)
-            self._public_sharder = sharder
             self._instruments = instruments
 
     async def rebalance_public_routes(self) -> bool:
-        if self._task is None:
-            raise RuntimeError("sources are not running")
+        if self._task is None or self._stop is None or self._stop.is_set():
+            raise SourceUpdateError("sources are not available for route rebalance")
         async with self._update_lock:
+            if self._task is None or self._stop is None or self._stop.is_set():
+                raise SourceUpdateError("sources stopped before route rebalance")
             if not self._traffic.has_complete_evidence:
                 logger.info(
                     "public route rebalance skipped: 24 complete traffic blocks unavailable"
@@ -166,7 +175,11 @@ class SourceManager:
                 self._config.public_connection_shards,
                 self._traffic.effective_rates(),
             )
-            shards = sharder.shards(self._instruments)
+            current_shards = tuple(
+                self._routes[f"public-{index}"].instruments
+                for index in range(self._config.public_connection_shards)
+            )
+            shards = sharder.rebalance(self._instruments, current_shards)
             changed = await _add_ready_remove(self._public_route_plans(shards))
             self._public_sharder = sharder
             if changed:
@@ -344,8 +357,8 @@ async def _add_ready_remove(
     ]
     if additions:
         results = await asyncio.gather(*additions, return_exceptions=True)
-        errors = [result for result in results if isinstance(result, BaseException)]
-        if errors:
+        failures = [result for result in results if isinstance(result, BaseException)]
+        if failures:
             rollbacks = [
                 update(current)
                 for current, values, _target, update in expanded
@@ -360,11 +373,28 @@ async def _add_ready_remove(
                     "source expansion rollback incomplete failures=%d",
                     rollback_failures,
                 )
+            cancellation = next(
+                (result for result in failures if isinstance(result, asyncio.CancelledError)),
+                None,
+            )
+            if cancellation is not None:
+                raise cancellation
             message = "source expansion failed before old subscriptions were removed"
-            raise RuntimeError(message) from errors[0]
+            raise SourceUpdateError(message) from failures[0]
     removals = [
         update(target) for _current, values, target, update in expanded if target != values
     ]
     if removals:
-        await asyncio.gather(*removals)
+        results = await asyncio.gather(*removals, return_exceptions=True)
+        cancellation = next(
+            (result for result in results if isinstance(result, asyncio.CancelledError)),
+            None,
+        )
+        if cancellation is not None:
+            raise cancellation
+        errors = [result for result in results if isinstance(result, Exception)]
+        if errors:
+            raise SourceUpdateError(
+                "source removal incomplete; expanded coverage remains active"
+            ) from errors[0]
     return True

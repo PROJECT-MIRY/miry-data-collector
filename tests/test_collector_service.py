@@ -10,27 +10,31 @@ import pytest
 from pydantic import BaseModel
 
 from miry.collector.service import CollectorService
+from miry.collector.sources import SourceUpdateError
 from miry.collector.spool import AckApplyResult, SpoolStatus
 from miry.contracts.models import GapReason, StreamType
 
 
 class OnlineSources:
     running = True
+    ready_for_rebalance = True
 
     def __init__(self) -> None:
         self.updates: list[tuple[str, ...]] = []
-        self.update_rebalances: list[bool] = []
         self.rebalances = 0
 
-    async def update_instruments(
-        self, members: tuple[str, ...], *, rebalance_public: bool = False
-    ) -> None:
+    async def update_instruments(self, members: tuple[str, ...]) -> None:
         self.updates.append(members)
-        self.update_rebalances.append(rebalance_public)
 
     async def rebalance_public_routes(self) -> bool:
         self.rebalances += 1
         return True
+
+
+class RebalanceTimeoutSources(OnlineSources):
+    async def rebalance_public_routes(self) -> bool:
+        self.rebalances += 1
+        raise SourceUpdateError("subscription update acknowledgement timed out")
 
 
 class StorageSources:
@@ -197,10 +201,54 @@ async def test_midnight_without_change_keeps_all_sources_online() -> None:
     await service._apply_midnight_boundary(midnight)
 
     assert service._sources.updates == []  # type: ignore[attr-defined]
-    assert service._sources.rebalances == 1  # type: ignore[attr-defined]
+    assert service._sources.rebalances == 0  # type: ignore[attr-defined]
+    assert service._rebalance_requested.is_set()  # type: ignore[attr-defined]
     assert service._gaps.opened_symbols == []  # type: ignore[attr-defined]
     assert service._ingest.rotations == ["a" * 64, "a" * 64]  # type: ignore[attr-defined]
     assert service._day_index.seals == [date(2026, 8, 10)]  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_midnight_rebalance_timeout_is_recoverable() -> None:
+    previous = FakeDecision(members=_members(), universe_hash="a" * 64)
+    service = _service(previous, None)
+    service._sources = RebalanceTimeoutSources()
+
+    await service._apply_midnight_boundary(datetime(2026, 8, 11, tzinfo=UTC))
+    assert await service._try_public_rebalance() is None
+
+    assert service._sources.running
+    assert service._sources.rebalances == 1
+    assert not service._stop.is_set()
+    assert service._ingest.rotations == ["a" * 64, "a" * 64]
+    assert service._control_events == [StreamType.UNIVERSE_DECISION]
+    assert service._day_index.seals == [date(2026, 8, 10)]
+    assert service._lease.seals == [date(2026, 8, 10)]
+
+
+@pytest.mark.asyncio
+async def test_rebalance_loop_converges_in_bounded_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(FakeDecision(members=_members(), universe_hash="a" * 64), None)
+    outcomes = iter((True, True, False))
+    calls = 0
+
+    async def try_rebalance() -> bool:
+        nonlocal calls
+        calls += 1
+        outcome = next(outcomes)
+        if outcome is False:
+            service._stop.set()
+        return outcome
+
+    service._try_public_rebalance = try_rebalance
+    service._rebalance_requested.set()
+    monkeypatch.setattr("miry.collector.service.PUBLIC_REBALANCE_COOLDOWN_SECONDS", 0)
+
+    await asyncio.wait_for(service._rebalance_loop(), timeout=0.5)
+
+    assert calls == 3
 
 
 @pytest.mark.asyncio
@@ -214,8 +262,8 @@ async def test_one_symbol_change_only_marks_changed_symbols() -> None:
     await service._apply_midnight_boundary(datetime(2026, 8, 11, tzinfo=UTC))
 
     assert service._sources.updates == [next_members]  # type: ignore[attr-defined]
-    assert service._sources.update_rebalances == [True]  # type: ignore[attr-defined]
     assert service._sources.rebalances == 0  # type: ignore[attr-defined]
+    assert service._rebalance_requested.is_set()  # type: ignore[attr-defined]
     assert service._gaps.opened_symbols == [("NEWUSDT", previous_members[-1])]  # type: ignore[attr-defined]
     assert service._gaps.closed_symbols == [("NEWUSDT", previous_members[-1])]  # type: ignore[attr-defined]
     assert service._gaps.affected_from_ns == [1_786_406_400_000_000_000]  # type: ignore[attr-defined]
@@ -297,13 +345,16 @@ def _service(previous: object, decision: object | None) -> Any:
     service._ingest = RecordingIngest()
     service._day_index = RecordingDayIndex()
     service._lease = RecordingLease()
-    service._config = SimpleNamespace(day_seal_grace_seconds=0)
+    service._config = SimpleNamespace(day_seal_grace_seconds=0, queue_resume_ratio=0.5)
+    service._queues = SimpleNamespace(utilization=0.0)
     service._stop = asyncio.Event()
+    service._rebalance_requested = asyncio.Event()
     service._writers = SimpleNamespace(metrics=SimpleNamespace(durable_through_ns=1))
     service._service_started_ns = 1
+    service._control_events = []
 
     async def record_control(_stream_type: StreamType, _payload: bytes) -> None:
-        return None
+        service._control_events.append(_stream_type)
 
     service._emit_control_event = record_control
     return service

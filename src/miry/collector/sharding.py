@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+REBALANCE_TRIGGER_RATIO = 1.25
+
 
 class TrafficSharder:
     """Balance symbols by message rate while preserving existing route assignments."""
@@ -47,6 +49,38 @@ class TrafficSharder:
             }
         return tuple(tuple(sorted(shard)) for shard in shards)
 
+    def rebalance(
+        self,
+        instruments: tuple[str, ...],
+        current_shards: tuple[tuple[str, ...], ...],
+    ) -> tuple[tuple[str, ...], ...]:
+        """Improve a live assignment with at most one pairwise swap."""
+        shard_count = min(self._count, len(instruments))
+        if len(current_shards) != shard_count:
+            raise ValueError("current shard count does not match configured shard count")
+        active = set(instruments)
+        flattened = [symbol for shard in current_shards for symbol in shard]
+        if len(flattened) != len(active) or set(flattened) != active:
+            raise ValueError("current shards must contain every active symbol exactly once")
+
+        shards = [list(shard) for shard in current_shards]
+        loads = [sum(self._message_rate(symbol) for symbol in shard) for shard in shards]
+        total_load = sum(loads)
+        if (
+            shard_count < 2
+            or max(loads) * shard_count <= total_load * REBALANCE_TRIGGER_RATIO
+        ):
+            self._assignments = {
+                symbol: shard for shard, symbols in enumerate(shards) for symbol in symbols
+            }
+            return tuple(tuple(sorted(shard)) for shard in shards)
+
+        self._improve_balance(shards, loads, max_swaps=1)
+        self._assignments = {
+            symbol: shard for shard, symbols in enumerate(shards) for symbol in symbols
+        }
+        return tuple(tuple(sorted(shard)) for shard in shards)
+
     def _message_rate(self, symbol: str) -> int:
         if symbol in self._message_rates:
             return self._message_rates[symbol]
@@ -56,7 +90,19 @@ class TrafficSharder:
         return 1
 
     def _improve_initial_balance(self, shards: list[list[str]], loads: list[int]) -> None:
+        self._improve_balance(shards, loads, max_swaps=None)
+
+    def _improve_balance(
+        self,
+        shards: list[list[str]],
+        loads: list[int],
+        *,
+        max_swaps: int | None,
+    ) -> None:
+        swaps = 0
         while True:
+            if max_swaps is not None and swaps >= max_swaps:
+                return
             current_spread = max(loads) - min(loads)
             best: tuple[int, int, str, str, int, int] | None = None
             best_spread = current_spread
@@ -97,3 +143,4 @@ class TrafficSharder:
             shards[right].append(left_symbol)
             loads[left] = next_left
             loads[right] = next_right
+            swaps += 1

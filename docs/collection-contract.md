@@ -1,9 +1,9 @@
-# v0.5.3 正式采集与处理合同
+# v0.5.4 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.4.0 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.4 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -79,7 +79,7 @@ mature 证据池少于 65 时报警。任何角色证据或候选不足都 fail 
 
 无成员变化的 UTC 日切 rollover gap journal，并通过 writer barrier finalize 前一天所有 chunk 后
 seal；它不停止或重建任何 Binance 连接，也不产生 `PLANNED_BOUNDARY_GAP`。writer barrier
-由 ingest lock 串行化，因此不会丢弃边界上的事件。
+由 admission barrier 串行化，因此不会丢弃边界上的事件。
 
 有成员变化时先切换 writer 的 `universe_hash`，再通过现有连接发送
 在线两阶段订阅更新：所有目标 public/market route 先增加新币，完成订阅 ACK、L2 snapshot、关键流
@@ -87,14 +87,17 @@ seal；它不停止或重建任何 Binance 连接，也不产生 `PLANNED_BOUNDA
 `exchange_symbols` 只包含集合差集，不包含未变化的币。因此 candidate 轮换不会让 50 个
 core 出现计划中断。
 
-每个 UTC 日切还会用最近 24 个完整小时的实际 public 消息峰值评估一次 route 均衡。证据不足或
-目标分片不变时不动作；需要搬迁时复用同一全局两阶段交接，不重启 collector，也不产生 universe
-generation 或 `PLANNED_BOUNDARY_GAP`。交接期可能有可去重的重复 raw，但不会先退订形成未登记空窗。
+public route 每小时使用最近 24 个完整小时的实际消息峰值评估一次负载；日封存完成后也触发一次
+评估。它继承当前 assignment，只有最大 route 预计负载超过平均值 `1.25x` 且一次 pair swap 能改善
+最大最小差时才搬迁。单批最多交换一对 symbol，成功后冷却 5 分钟并继续评估直到收敛；raw queue
+达到 50% 或任一 public route 正在恢复时暂停。迁移复用同一两阶段交接，不重启 collector，也不
+产生 universe generation 或 `PLANNED_BOUNDARY_GAP`。交接期可能有可去重的重复 raw，但不会先退订
+形成未登记空窗。成员实际变化同样继承现有 route，只为退出/进入成员改变订阅，再由限幅循环校准。
 
 WebSocket 30 秒无任何消息会重连整个异常连接。每个币的 `depth` 与 `bookTicker` 分别以 30 秒
 保守阈值监控，`markPrice@1s` 以 15 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已
-证明事件时刻打开 symbol/stream-scoped `CONNECTION_LOST_GAP`。控制 ACK 使用独立 20 秒 deadline，
-snapshot completion 最长等待 180 秒；ACK 不代表恢复，必须看到对应 stream 的第一条新事件才关闭
+证明事件时刻打开 symbol/stream-scoped `CONNECTION_LOST_GAP`。控制 ACK 使用独立 20 秒 deadline；
+请求在本机等待 audit/control 锁时不消耗该预算。snapshot completion 最长等待 180 秒；ACK 不代表恢复，必须看到对应 stream 的第一条新事件才关闭
 scoped gap，L2 validity 还必须等待 snapshot bridge。同一活跃连接连续两次局部恢复失败时才重建所属 route，并为该 route
 被主动中断的全部 symbol/stream 打开 transport gap；其他 route、REST poller 和 writer 继续工作。
 每条连接每 60 秒执行一次 `LIST_SUBSCRIPTIONS`，单次响应 deadline 为 20 秒；集合不一致立即失败，
@@ -143,7 +146,7 @@ ready 前必须先写可恢复 transaction。损坏、未知或 hash 冲突 ACK 
 
 - Docker：`1.00 CPU`、`768MiB`、`256 PIDs`；
 - 正式基线使用 4 个 public shards；配置支持 8 条受控 A/B，满 24 个完整小时证据后才切换；
-  运行期只在 UTC 日切执行一次无重启再均衡；
+  运行期按上述每小时评估、5 分钟限幅批次无重启再均衡；
 - WebSocket queue 为 16，单消息上限 2MiB；
 - 1,000 档 snapshot 起点全局最小间隔 0.75 秒、最多 4 个 HTTP 在途，持续上限约 1,600
   request-weight/min；恢复 snapshot 排队/在途时暂停 discovery REST；

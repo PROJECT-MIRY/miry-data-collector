@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.3 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.4 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -167,3 +167,8 @@ v0.5.3 将 normalize 的 chunk SHA、Parquet 解码、JSON parse 和 typed 写�
 主进程仍按 manifest 原顺序执行 dedup/checkpoint reducer。运行期 identity 使用 tuple，仅在跨日
 checkpoint 边界计算稳定 SHA。08-23 真实大 chunk 的完整写入/dedup 基准由 `132.3s` 降到 `62.5s`
 （2.12x），串并行 Arrow 表逐文件一致；8 workers 反而受共享存储限制慢于 4 workers。
+
+v0.5.4 将 public route 流量重平衡移出 UTC 日切关键路径，继承当前 assignment 并以每 5 分钟最多
+一对 symbol 的批次持续收敛；每小时重评最近 24 个完整块，高水位或连接恢复期间暂停。控制 ACK
+deadline 从请求实际开始执行后计时，receiver 定期让出事件循环，raw admission 只在 writer
+rotation 时关闭。网络或 Binance 仍可能断开单条连接，但可恢复迁移失败不再终止整个 collector。

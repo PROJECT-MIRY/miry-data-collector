@@ -93,6 +93,39 @@ def test_eight_shards_bound_fault_scope_and_snapshot_wait() -> None:
     assert (max(map(len, shards)) - 1) * config.snapshot_request_interval_seconds <= 6
 
 
+def test_live_rebalance_moves_at_most_one_symbol_pair() -> None:
+    rates = {
+        "AUSDT": 100,
+        "BUSDT": 90,
+        "CUSDT": 10,
+        "DUSDT": 5,
+    }
+    current = (("AUSDT", "BUSDT"), ("CUSDT", "DUSDT"))
+
+    rebalanced = TrafficSharder(2, rates).rebalance(tuple(rates), current)
+
+    moved = {
+        symbol
+        for symbol in rates
+        if next(index for index, shard in enumerate(current) if symbol in shard)
+        != next(index for index, shard in enumerate(rebalanced) if symbol in shard)
+    }
+    assert rebalanced == (("BUSDT", "CUSDT"), ("AUSDT", "DUSDT"))
+    assert len(moved) == 2
+
+
+def test_live_rebalance_keeps_assignment_below_imbalance_trigger() -> None:
+    rates = {
+        "AUSDT": 60,
+        "BUSDT": 50,
+        "CUSDT": 55,
+        "DUSDT": 45,
+    }
+    current = (("AUSDT", "DUSDT"), ("BUSDT", "CUSDT"))
+
+    assert TrafficSharder(2, rates).rebalance(tuple(rates), current) == current
+
+
 def test_observed_rates_require_24_complete_blocks_and_keep_24(tmp_path: Path) -> None:
     clock = FakeClock()
     recorder = PublicTrafficRecorder(

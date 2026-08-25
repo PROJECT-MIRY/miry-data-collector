@@ -17,7 +17,8 @@ from miry.collector.polling import RestPollers
 from miry.collector.readiness import required_realtime_sources
 from miry.collector.routes import ConnectionHandle, RouteRunner, _reconnect_delay
 from miry.collector.scheduling import advance_fixed_deadline, staggered_offsets
-from miry.collector.sources import SourceManager
+from miry.collector.sharding import TrafficSharder
+from miry.collector.sources import SourceManager, SourceUpdateError
 from miry.collector.websocket import SourceIdentity, public_subscriptions
 from miry.contracts.models import GapReason, RawEvent, StreamType
 
@@ -352,6 +353,7 @@ async def test_live_update_only_changes_replaced_symbol_subscriptions() -> None:
         "newusdt@depth@100ms",
     }
     assert update.snapshot_requests == (("NEWUSDT", StreamType.DEPTH_SNAPSHOT),)
+    update.started.set_result(None)
     update.acknowledged.set_result(None)
     update.completion.set_result(None)
     await asyncio.sleep(0)
@@ -389,6 +391,7 @@ async def test_live_update_counts_events_received_while_snapshot_is_pending() ->
     update = await asyncio.wait_for(runner._updates.get(), timeout=0.5)
     runner._mark_event(StreamType.BOOK_TICKER, "ETHUSDT")
     runner._mark_event(StreamType.DEPTH, "ETHUSDT")
+    update.started.set_result(None)
     update.acknowledged.set_result(None)
     update.completion.set_result(None)
 
@@ -469,6 +472,7 @@ async def test_source_manager_rebalances_once_with_complete_traffic_evidence() -
 
     manager = object.__new__(SourceManager)
     manager._task = asyncio.current_task()
+    manager._stop = asyncio.Event()
     manager._update_lock = asyncio.Lock()
     manager._config = SimpleNamespace(public_connection_shards=2)
     manager._traffic = CompleteTraffic()
@@ -479,12 +483,12 @@ async def test_source_manager_rebalances_once_with_complete_traffic_evidence() -
 
     assert await manager.rebalance_public_routes()
     assert public_0.calls == [
-        ("AUSDT", "BUSDT", "DUSDT"),
-        ("AUSDT", "DUSDT"),
+        ("AUSDT", "BUSDT", "CUSDT"),
+        ("BUSDT", "CUSDT"),
     ]
     assert public_1.calls == [
-        ("BUSDT", "CUSDT", "DUSDT"),
-        ("BUSDT", "CUSDT"),
+        ("AUSDT", "CUSDT", "DUSDT"),
+        ("AUSDT", "DUSDT"),
     ]
 
     assert not await manager.rebalance_public_routes()
@@ -537,6 +541,48 @@ async def test_source_manager_rolls_back_expansion_before_any_trim_on_failure() 
 
 
 @pytest.mark.asyncio
+async def test_source_manager_keeps_expanded_coverage_when_trim_fails() -> None:
+    class CompleteTraffic:
+        has_complete_evidence = True
+
+        def effective_rates(self) -> dict[str, int]:
+            return {"AUSDT": 100, "BUSDT": 90, "CUSDT": 10, "DUSDT": 5}
+
+    class RecordingRoute:
+        def __init__(self, instruments: tuple[str, ...], *, fail_trim: bool = False) -> None:
+            self.instruments = instruments
+            self.fail_trim = fail_trim
+            self.calls: list[tuple[str, ...]] = []
+
+        async def update_instruments(self, instruments: tuple[str, ...]) -> None:
+            self.calls.append(instruments)
+            if self.fail_trim and len(self.calls) == 2:
+                raise TimeoutError("trim acknowledgement timed out")
+            self.instruments = instruments
+
+    manager = object.__new__(SourceManager)
+    manager._task = asyncio.current_task()
+    manager._stop = asyncio.Event()
+    manager._update_lock = asyncio.Lock()
+    manager._config = SimpleNamespace(public_connection_shards=2)
+    manager._traffic = CompleteTraffic()
+    manager._instruments = ("AUSDT", "BUSDT", "CUSDT", "DUSDT")
+    old_sharder = TrafficSharder(2, CompleteTraffic().effective_rates())
+    manager._public_sharder = old_sharder
+    public_0 = RecordingRoute(("AUSDT", "BUSDT"), fail_trim=True)
+    public_1 = RecordingRoute(("CUSDT", "DUSDT"))
+    manager._routes = {"public-0": public_0, "public-1": public_1}
+
+    with pytest.raises(SourceUpdateError, match="expanded coverage remains active"):
+        await manager.rebalance_public_routes()
+
+    assert set(public_0.instruments) | set(public_1.instruments) == set(manager._instruments)
+    assert public_0.instruments == ("AUSDT", "BUSDT", "CUSDT")
+    assert public_1.instruments == ("AUSDT", "DUSDT")
+    assert manager._public_sharder is old_sharder
+
+
+@pytest.mark.asyncio
 async def test_targeted_refresh_only_changes_stale_public_streams() -> None:
     runner = RouteRunner(
         name="public-0",
@@ -577,6 +623,7 @@ async def test_targeted_refresh_only_changes_stale_public_streams() -> None:
     assert update.remove == ("btcusdt@depth@100ms", "ethusdt@bookTicker")
     assert update.add == update.remove
     assert update.snapshot_requests == (("BTCUSDT", StreamType.DEPTH_SNAPSHOT),)
+    update.started.set_result(None)
     update.acknowledged.set_result(None)
     update.completion.set_result(None)
     await refreshing
@@ -625,6 +672,7 @@ async def test_targeted_mark_price_refresh_does_not_touch_trade_streams() -> Non
     assert update.remove == ("btcusdt@markPrice@1s",)
     assert update.add == update.remove
     assert update.snapshot_requests == ()
+    update.started.set_result(None)
     update.acknowledged.set_result(None)
     update.completion.set_result(None)
     await refreshing
@@ -660,11 +708,52 @@ async def test_subscription_ack_deadline_is_separate_from_snapshot_completion() 
         runner._refresh_keys(((StreamType.DEPTH, "BTCUSDT"),))
     )
     update = await asyncio.wait_for(runner._updates.get(), timeout=0.5)
+    update.started.set_result(None)
     update.acknowledged.set_result(None)
 
     await asyncio.sleep(0.02)
     assert not refreshing.done(), "snapshot completion inherited the control ACK deadline"
 
+    update.completion.set_result(None)
+    await refreshing
+
+
+@pytest.mark.asyncio
+async def test_subscription_ack_deadline_starts_after_control_queue_wait() -> None:
+    runner = RouteRunner(
+        name="public-0",
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@depth@100ms",),
+        instruments=("BTCUSDT",),
+        stream_types=(StreamType.DEPTH,),
+        collector_id="tokyo01",
+        boot_id="boot",
+        ingest=SimpleNamespace(),  # type: ignore[arg-type]
+        queues=FakeQueues(),  # type: ignore[arg-type]
+        gaps=SimpleNamespace(),  # type: ignore[arg-type]
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        rotation_seconds=82_800,
+        overlap_seconds=15,
+        receive_timeout_seconds=30,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        service_stop=asyncio.Event(),
+        subscriptions_for=lambda values: tuple(
+            f"{symbol.lower()}@depth@100ms" for symbol in values
+        ),
+        subscription_audit_timeout_seconds=0.01,
+    )
+
+    refreshing = asyncio.create_task(
+        runner._refresh_keys(((StreamType.DEPTH, "BTCUSDT"),))
+    )
+    update = await asyncio.wait_for(runner._updates.get(), timeout=0.5)
+
+    await asyncio.sleep(0.02)
+    assert not refreshing.done(), "queue wait consumed the network ACK deadline"
+
+    update.started.set_result(None)
+    update.acknowledged.set_result(None)
     update.completion.set_result(None)
     await refreshing
 

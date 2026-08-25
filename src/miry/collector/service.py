@@ -19,7 +19,7 @@ from miry.collector.ingest import IngestCoordinator
 from miry.collector.lease import CollectorLease
 from miry.collector.membership import UniverseStore
 from miry.collector.queue import ByteBoundedQueues
-from miry.collector.sources import SourceManager
+from miry.collector.sources import SourceManager, SourceUpdateError
 from miry.collector.spool import AckApplyResult, SpoolManager
 from miry.collector.websocket import SourceIdentity
 from miry.collector.writer import ChunkLimits, WriterPool
@@ -35,6 +35,10 @@ from miry.universe.models import DiscoverySnapshot
 
 logger = logging.getLogger(__name__)
 
+PUBLIC_REBALANCE_INTERVAL_SECONDS = 3_600
+PUBLIC_REBALANCE_COOLDOWN_SECONDS = 300
+PUBLIC_REBALANCE_RETRY_SECONDS = (30, 60, 120)
+
 
 class CollectorService:
     def __init__(self, config: CollectorConfig) -> None:
@@ -42,6 +46,7 @@ class CollectorService:
         self._boot_id = uuid4().hex
         self._operation_lock = asyncio.Lock()
         self._stop = asyncio.Event()
+        self._rebalance_requested = asyncio.Event()
 
         self._spool = SpoolManager(
             config.data_root,
@@ -146,6 +151,7 @@ class CollectorService:
         background = [
             asyncio.create_task(self._storage_loop(), name="storage-monitor"),
             asyncio.create_task(self._midnight_loop(), name="utc-midnight-rotation"),
+            asyncio.create_task(self._rebalance_loop(), name="public-route-rebalance"),
             asyncio.create_task(self._stats_loop(), name="collector-stats"),
             asyncio.create_task(self._writers.wait_for_failure(), name="writer-health"),
             asyncio.create_task(self._lease_loop(), name="collector-lease"),
@@ -272,6 +278,52 @@ class CollectorService:
             await asyncio.to_thread(self._lease.write_running, self._lease_watermark_ns())
             await _wait_event(self._stop, self._config.lease_heartbeat_seconds)
 
+    async def _rebalance_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                async with asyncio.timeout(PUBLIC_REBALANCE_INTERVAL_SECONDS):
+                    await self._rebalance_requested.wait()
+            except TimeoutError:
+                pass
+            self._rebalance_requested.clear()
+            if self._stop.is_set():
+                return
+            failures = 0
+            while not self._stop.is_set():
+                changed = await self._try_public_rebalance()
+                if changed is False:
+                    break
+                if changed is True:
+                    failures = 0
+                    await _wait_event(self._stop, PUBLIC_REBALANCE_COOLDOWN_SECONDS)
+                    continue
+                if failures >= len(PUBLIC_REBALANCE_RETRY_SECONDS):
+                    break
+                delay = PUBLIC_REBALANCE_RETRY_SECONDS[failures]
+                failures += 1
+                logger.warning(
+                    "public route rebalance deferred retry=%d delay_s=%d",
+                    failures,
+                    delay,
+                )
+                await _wait_event(self._stop, delay)
+
+    async def _try_public_rebalance(self) -> bool | None:
+        if (
+            not self._sources.running
+            or not self._sources.ready_for_rebalance
+            or self._queues.utilization >= self._config.queue_resume_ratio
+        ):
+            return None
+        try:
+            return await self._sources.rebalance_public_routes()
+        except SourceUpdateError as exc:
+            logger.warning(
+                "public route rebalance incomplete; source-local recovery will continue error=%r",
+                exc,
+            )
+            return None
+
     async def _apply_midnight_boundary(self, midnight: datetime) -> None:
         previous = self._universe_store.active
         was_running = self._sources.running
@@ -296,10 +348,7 @@ class CollectorService:
         if decision is not None:
             self._gaps.set_universe_hash(active.universe_hash)
             if was_running:
-                await self._sources.update_instruments(
-                    active.members,
-                    rebalance_public=True,
-                )
+                await self._sources.update_instruments(active.members)
             if boundary_gap is not None:
                 await self._gaps.close(
                     boundary_gap,
@@ -307,8 +356,6 @@ class CollectorService:
                     exchange_symbols=changed,
                     detail="new subscriptions, L2 snapshots, and first OI samples are ready",
                 )
-        elif was_running:
-            await self._sources.rebalance_public_routes()
         await self._emit_control_event(StreamType.UNIVERSE_DECISION, canonical_json_bytes(active))
         await self._ingest.rotate(universe_hash=active.universe_hash)
         await _wait_event(self._stop, self._config.day_seal_grace_seconds)
@@ -320,6 +367,8 @@ class CollectorService:
             previous_date,
             decision is not None,
         )
+        if was_running:
+            self._rebalance_requested.set()
 
     async def _on_discovery(self, snapshot: DiscoverySnapshot) -> None:
         async with self._operation_lock:

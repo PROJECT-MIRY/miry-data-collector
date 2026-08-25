@@ -188,6 +188,22 @@ class RecordingIngest:
         self.events.append(event)
 
 
+class FairnessIngest(RecordingIngest):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed_event_count: int | None = None
+        self.observer: asyncio.Task[None] | None = None
+
+    async def put(self, event: RawEvent) -> None:
+        await super().put(event)
+        if len(self.events) == 2:
+            self.observer = asyncio.create_task(self._observe())
+
+    async def _observe(self) -> None:
+        await asyncio.sleep(0)
+        self.observed_event_count = len(self.events)
+
+
 class BurstWebSocket:
     remote_address = ("127.0.0.1", 443)
     latency = 0.001
@@ -236,6 +252,36 @@ class UpdatingWebSocket:
     async def recv(self, *, decode: bool) -> bytes:
         assert decode is False
         return await self.responses.get()
+
+
+class OneControlResponseWebSocket:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def recv(self, *, decode: bool) -> bytes:
+        assert decode is False
+        self.calls += 1
+        if self.calls == 1:
+            return orjson.dumps({"result": None, "id": 1})
+        await asyncio.Future()
+        raise AssertionError("unreachable")
+
+
+class BlockingIngest:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def put(self, _event: RawEvent) -> None:
+        self.started.set()
+        await asyncio.Future()
+
+
+class RecordingControl:
+    def __init__(self) -> None:
+        self.messages: list[dict[str, object]] = []
+
+    def deliver(self, message: dict[str, object], _observed_at: int) -> None:
+        self.messages.append(message)
 
 
 @pytest.mark.asyncio
@@ -650,7 +696,7 @@ async def test_burst_receive_uses_constant_background_tasks(
 ) -> None:
     stop = asyncio.Event()
     websocket = BurstWebSocket(200, stop)
-    ingest = RecordingIngest()
+    ingest = FairnessIngest()
     monkeypatch.setattr(
         "miry.collector.websocket.connect",
         lambda *args, **kwargs: fake_connection(websocket),
@@ -692,8 +738,12 @@ async def test_burst_receive_uses_constant_background_tasks(
     )
 
     await connection.run()
+    assert ingest.observer is not None
+    await ingest.observer
 
     assert len(ingest.events) == 201
+    assert ingest.observed_event_count is not None
+    assert ingest.observed_event_count < len(ingest.events)
     assert tasks_created <= 12
 
 
@@ -739,6 +789,7 @@ async def test_subscription_update_acknowledges_without_stopping_receiver(
     try:
         await asyncio.wait_for(ready.wait(), timeout=0.2)
         loop = asyncio.get_running_loop()
+        started = loop.create_future()
         acknowledged = loop.create_future()
         completion = loop.create_future()
         updates.put_nowait(
@@ -746,6 +797,7 @@ async def test_subscription_update_acknowledges_without_stopping_receiver(
                 add=("ethusdt@bookTicker",),
                 remove=("btcusdt@bookTicker",),
                 snapshot_requests=(),
+                started=started,
                 acknowledged=acknowledged,
                 completion=completion,
             )
@@ -756,6 +808,43 @@ async def test_subscription_update_acknowledges_without_stopping_receiver(
     finally:
         stop.set()
         await asyncio.wait_for(task, timeout=0.2)
+
+
+@pytest.mark.asyncio
+async def test_control_response_is_delivered_before_ingest_barrier() -> None:
+    ingest = BlockingIngest()
+    control = RecordingControl()
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=(),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=ingest,  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=asyncio.Event(),
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+    )
+
+    receiving = asyncio.create_task(
+        connection._receive_loop(  # type: ignore[arg-type]
+            OneControlResponseWebSocket(),
+            control,
+        )
+    )
+    try:
+        await asyncio.wait_for(ingest.started.wait(), timeout=0.2)
+        assert control.messages == [{"result": None, "id": 1}]
+    finally:
+        receiving.cancel()
+        await asyncio.gather(receiving, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -815,8 +904,10 @@ async def test_reconnected_websocket_ignores_expired_subscription_update(
         lambda *args, **kwargs: fake_connection(websocket),
     )
     loop = asyncio.get_running_loop()
+    started = loop.create_future()
     acknowledged = loop.create_future()
     completion = loop.create_future()
+    started.cancel()
     acknowledged.cancel()
     completion.cancel()
     updates: asyncio.Queue[SubscriptionUpdate] = asyncio.Queue()
@@ -825,6 +916,7 @@ async def test_reconnected_websocket_ignores_expired_subscription_update(
             add=("ethusdt@markPrice@1s",),
             remove=("btcusdt@markPrice@1s",),
             snapshot_requests=(),
+            started=started,
             acknowledged=acknowledged,
             completion=completion,
         )

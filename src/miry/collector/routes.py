@@ -121,6 +121,10 @@ class RouteRunner:
     def instruments(self) -> tuple[str, ...]:
         return self._instruments
 
+    @property
+    def ready(self) -> bool:
+        return self._connection_ready.is_set() and not self._reconnect_requested.is_set()
+
     async def update_instruments(self, instruments: tuple[str, ...]) -> None:
         if self._subscriptions_for is None:
             raise RuntimeError(f"route {self._name} does not support live updates")
@@ -312,24 +316,28 @@ class RouteRunner:
         snapshot_requests: tuple[tuple[str, StreamType], ...],
     ) -> None:
         loop = asyncio.get_running_loop()
+        started = loop.create_future()
         acknowledged = loop.create_future()
         completion = loop.create_future()
         try:
-            async with asyncio.timeout(self._subscription_audit_timeout_seconds):
-                await self._updates.put(
-                    SubscriptionUpdate(
-                        add=add,
-                        remove=remove,
-                        snapshot_requests=snapshot_requests,
-                        acknowledged=acknowledged,
-                        completion=completion,
-                    )
+            await self._updates.put(
+                SubscriptionUpdate(
+                    add=add,
+                    remove=remove,
+                    snapshot_requests=snapshot_requests,
+                    started=started,
+                    acknowledged=acknowledged,
+                    completion=completion,
                 )
+            )
+            async with asyncio.timeout(180):
+                await started
+            async with asyncio.timeout(self._subscription_audit_timeout_seconds):
                 await acknowledged
             async with asyncio.timeout(180):
                 await completion
         finally:
-            for future in (acknowledged, completion):
+            for future in (started, acknowledged, completion):
                 if not future.done():
                     future.cancel()
 

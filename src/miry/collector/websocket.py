@@ -22,6 +22,8 @@ from miry.contracts.models import RawEvent, StreamType
 
 logger = logging.getLogger(__name__)
 
+RECEIVE_FAIRNESS_BATCH = 64
+
 
 @dataclass(frozen=True, slots=True)
 class DecodedWebSocket:
@@ -259,6 +261,7 @@ class BinanceWebSocketConnection:
     async def _receive_loop(
         self, websocket: ClientConnection, control: SubscriptionController
     ) -> None:
+        received_since_yield = 0
         while not self._stop.is_set():
             raw = await websocket.recv(decode=False)
             realtime_ns = time.time_ns()
@@ -274,12 +277,18 @@ class BinanceWebSocketConnection:
                 realtime_ns=realtime_ns,
                 monotonic_ns=monotonic_ns,
             )
+            control_error: Exception | None = None
+            if decoded.stream_type is StreamType.WS_CONTROL and decoded.message:
+                try:
+                    control.deliver(decoded.message, realtime_ns)
+                except Exception as exc:
+                    control_error = exc
             await self._ingest.put(event)
+            if control_error is not None:
+                raise control_error
             self._on_event(decoded.stream_type, decoded.symbol)
             self._transport_pending.discard((decoded.stream_type, decoded.symbol or ""))
             self._maybe_mark_transport_ready()
-            if decoded.stream_type is StreamType.WS_CONTROL and decoded.message:
-                control.deliver(decoded.message, realtime_ns)
             if (
                 decoded.stream_type in {StreamType.DEPTH, StreamType.RPI_DEPTH}
                 and decoded.symbol
@@ -288,6 +297,10 @@ class BinanceWebSocketConnection:
                 await self._check_depth_sequence(
                     decoded.stream_type, decoded.symbol, decoded.data, realtime_ns
                 )
+            received_since_yield += 1
+            if received_since_yield >= RECEIVE_FAIRNESS_BATCH:
+                received_since_yield = 0
+                await asyncio.sleep(0)
 
     async def _bootstrap(
         self,

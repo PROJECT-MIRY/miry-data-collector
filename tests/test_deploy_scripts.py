@@ -56,6 +56,10 @@ def test_project_and_release_identity_use_miry_name() -> None:
     }
     assert readme.startswith("# miry-data-collector\n")
     assert "IMAGE_REPOSITORY: ghcr.io/project-miry/miry-data-collector" in release
+    assert (
+        "ghcr.io/project-miry/miry-data-collector"
+        in (PROJECT_ROOT / "deploy/vultr/edge.env.example").read_text(encoding="ascii")
+    )
     assert "miry-data-collector.sif" in release
 
 

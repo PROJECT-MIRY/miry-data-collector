@@ -13,12 +13,19 @@ class IngestCoordinator:
     def __init__(self, queues: ByteBoundedQueues, writers: WriterPool) -> None:
         self._queues = queues
         self._writers = writers
-        self._boundary_lock = asyncio.Lock()
+        self._rotation_lock = asyncio.Lock()
+        self._accepting = asyncio.Event()
+        self._accepting.set()
 
     async def put(self, event: RawEvent) -> None:
-        async with self._boundary_lock:
-            await self._queues.put(event)
+        if not self._accepting.is_set():
+            await self._accepting.wait()
+        await self._queues.put(event)
 
     async def rotate(self, *, universe_hash: str) -> None:
-        async with self._boundary_lock:
-            await self._writers.rotate_all(universe_hash=universe_hash)
+        async with self._rotation_lock:
+            self._accepting.clear()
+            try:
+                await self._writers.rotate_all(universe_hash=universe_hash)
+            finally:
+                self._accepting.set()

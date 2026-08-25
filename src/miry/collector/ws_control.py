@@ -25,6 +25,7 @@ class SubscriptionUpdate:
     add: tuple[str, ...]
     remove: tuple[str, ...]
     snapshot_requests: tuple[tuple[str, StreamType], ...]
+    started: asyncio.Future[None]
     acknowledged: asyncio.Future[None]
     completion: asyncio.Future[None]
 
@@ -169,7 +170,11 @@ class SubscriptionController:
     async def run_updates(self) -> None:
         while True:
             update = await self._updates.get()
-            if update.acknowledged.cancelled() or update.completion.cancelled():
+            if (
+                update.started.cancelled()
+                or update.acknowledged.cancelled()
+                or update.completion.cancelled()
+            ):
                 continue
             try:
                 await self._apply_update(update)
@@ -180,6 +185,8 @@ class SubscriptionController:
     async def _apply_update(self, update: SubscriptionUpdate) -> None:
         requests = []
         async with self._lock:
+            if not update.started.done():
+                update.started.set_result(None)
             for method, streams in (
                 ("UNSUBSCRIBE", update.remove),
                 ("SUBSCRIBE", update.add),
@@ -267,7 +274,18 @@ class SubscriptionController:
 
 
 def _fail_subscription_update(update: SubscriptionUpdate, error: BaseException) -> None:
-    if update.acknowledged.cancelled():
+    if update.started.cancelled():
+        if not update.acknowledged.done():
+            update.acknowledged.cancel()
+        if not update.completion.done():
+            update.completion.cancel()
+    elif not update.started.done():
+        update.started.set_exception(error)
+        if not update.acknowledged.done():
+            update.acknowledged.cancel()
+        if not update.completion.done():
+            update.completion.cancel()
+    elif update.acknowledged.cancelled():
         if not update.completion.done():
             update.completion.cancel()
     elif not update.acknowledged.done():

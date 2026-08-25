@@ -79,6 +79,15 @@ class RemoteStore(Protocol):
 
     def download(self, remote_path: str, local_file: BinaryIO) -> None: ...
 
+    def promote(
+        self,
+        remote_path: str,
+        destination: Path,
+        *,
+        size_bytes: int,
+        sha256: str,
+    ) -> bool: ...
+
     def write_atomic(self, path: str, content: bytes) -> None: ...
 
 
@@ -107,6 +116,31 @@ class FilesystemRemoteStore:
     def download(self, remote_path: str, local_file: BinaryIO) -> None:
         with self._path(remote_path).open("rb") as source:
             shutil.copyfileobj(source, local_file, length=1024 * 1024)
+
+    def promote(
+        self,
+        remote_path: str,
+        destination: Path,
+        *,
+        size_bytes: int,
+        sha256: str,
+    ) -> bool:
+        source = self._path(remote_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.stat().st_dev != destination.parent.stat().st_dev:
+            return False
+        with source.open("rb") as staged:
+            os.fsync(staged.fileno())
+        if source.stat().st_size != size_bytes:
+            raise ValueError(f"chunk size mismatch: {source}")
+        if sha256_file(source) != sha256:
+            raise ValueError(f"chunk hash mismatch: {source}")
+        source_parent = source.parent
+        source.replace(destination)
+        fsync_directory(destination.parent)
+        if source_parent != destination.parent:
+            fsync_directory(source_parent)
+        return True
 
     def write_atomic(self, path: str, content: bytes) -> None:
         atomic_write_bytes(self._path(path), content)
@@ -150,7 +184,7 @@ class RsyncTransport:
             self._remote(f"{self._ready_root}/"),
             f"{inventory}/",
         )
-        downloads = self._inventory_downloads(inventory)
+        downloads, manifest_count = self._inventory_downloads(inventory)
         lanes = partition_downloads(downloads, self._config.parallel_downloads)
         lane_root = self._mirror / "control" / "download-lanes"
         lane_root.mkdir(parents=True, exist_ok=True)
@@ -177,9 +211,12 @@ class RsyncTransport:
             expected_data=set(downloads),
         )
         logger.info(
-            "ready sync complete manifests=%d lanes=%d planned_bytes=%d "
+            "ready sync complete manifests=%d downloads=%d skipped_durable=%d lanes=%d "
+            "planned_bytes=%d "
             "duration_seconds=%.3f",
+            manifest_count,
             len(downloads),
+            manifest_count - len(downloads),
             len(lanes),
             sum(downloads.values()),
             time.monotonic() - started,
@@ -196,20 +233,32 @@ class RsyncTransport:
             f"{destination}/",
         )
 
-    @staticmethod
-    def _inventory_downloads(inventory: Path) -> dict[str, int]:
+    def _inventory_downloads(self, inventory: Path) -> tuple[dict[str, int], int]:
         downloads: dict[str, int] = {}
+        seen_data_paths: set[str] = set()
+        manifest_count = 0
         for path in sorted(inventory.rglob("*.manifest.json")):
             if any(part.startswith(".") for part in path.relative_to(inventory).parts):
                 continue
             manifest = ChunkManifest.model_validate_json(path.read_bytes())
+            manifest_count += 1
             data_path = safe_remote_root(manifest.data_path)
             if not data_path:
                 raise ValueError(f"manifest has an empty data path: {path}")
-            if data_path in downloads:
+            if data_path in seen_data_paths:
                 raise ValueError(f"duplicate manifest data path: {data_path}")
+            seen_data_paths.add(data_path)
+            if not COLLECTOR_ID_PATTERN.fullmatch(manifest.collector_id):
+                raise ValueError(f"unsafe collector_id: {manifest.collector_id!r}")
+            durable = (
+                self._config.local_raw_root
+                / f"collector={manifest.collector_id}"
+                / data_path
+            )
+            if durable.exists():
+                continue
             downloads[data_path] = manifest.size_bytes
-        return downloads
+        return downloads, manifest_count
 
     @staticmethod
     def _publish_inventory(
@@ -419,17 +468,23 @@ class Puller:
             self._verify_local(destination, manifest)
             wrote_data = False
         else:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            partial = destination.with_name(f".{destination.name}.partial")
-            with partial.open("wb") as output:
-                self._remote.download(
-                    posixpath.join(self._remote_ready_root, manifest.data_path), output
-                )
-                output.flush()
-                os.fsync(output.fileno())
-            self._verify_local(partial, manifest)
-            partial.replace(destination)
-            fsync_directory(destination.parent)
+            remote_path = posixpath.join(self._remote_ready_root, manifest.data_path)
+            promoted = self._remote.promote(
+                remote_path,
+                destination,
+                size_bytes=manifest.size_bytes,
+                sha256=manifest.sha256,
+            )
+            if not promoted:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                partial = destination.with_name(f".{destination.name}.partial")
+                with partial.open("wb") as output:
+                    self._remote.download(remote_path, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                self._verify_local(partial, manifest)
+                partial.replace(destination)
+                fsync_directory(destination.parent)
             wrote_data = True
 
         local_manifest = destination.with_suffix(".manifest.json")

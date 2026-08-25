@@ -49,6 +49,10 @@ ready 下载可使用最多 4 条并行 rsync lane，但每个 `data_path` 在�
 和全部 lane 完成前不得进入本地 ingest 或 ACK；任一 lane 失败只保留 staging/partial，不能授权
 远端 GC。ACK 上传仍是单一有序阶段。
 
+当 staging 与永久 raw 位于同一文件系统时，107 在 staging 上完成 fsync 和 SHA 后以原子 rename
+提升为 raw，并 fsync 源/目标目录；跨设备时回退为复制、fsync、SHA、rename。进程若在提升后、ACK
+前退出，下一轮必须跳过网络下载、重新验证永久 raw 并补 ACK。
+
 单个损坏 ACK、文件名不匹配、真正未知的 chunk 或 hash mismatch 不再终止 collector，也不会删除 ready。
 它们被原子移动到 `rejected-acks`，状态变为 `attention` 并写结构化错误事件。损坏 ready manifest
 同样不会让 storage task 崩溃；对应数据保持在 spool，等待人工处理，磁盘保护线仍然生效。

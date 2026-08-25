@@ -1,9 +1,9 @@
-# v0.5.7 正式采集与处理合同
+# v0.5.8 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.7 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.8 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传
@@ -131,8 +131,9 @@ ticker 响应的 SHA-256。该事件时间之后的数据属于正式实验。24
 
 1. 用固定私钥和 known_hosts 单独同步 Vultr `ready/` 的 manifest/SEALED inventory；
 2. 按 manifest 的 `size_bytes` 将互斥 `data_path` 均衡分配给最多 4 条并行 rsync lane；
-3. 所有 lane 成功后读取 manifest，将数据写入 `.partial`，fsync，校验 size 与 SHA-256；
-4. 原子 rename 到 `data/raw/collector=<id>/...`，再持久化本地 manifest；
+3. 所有 lane 成功后对 staging 数据 fsync，并校验 size 与 SHA-256；
+4. staging/raw 同设备时原子 rename 到 `data/raw/collector=<id>/...`；跨设备时才复制到 `.partial`
+   并再次校验，然后持久化本地 manifest；
 5. 生成 ACK 并 rsync 到 Vultr `control/acks/`；
 6. Vultr 只有在 ACK 的 chunk ID 和 SHA-256 都匹配后才删除 ready 数据。
 

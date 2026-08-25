@@ -365,7 +365,7 @@ wheels = [
 
 [[package]]
 name = "miry-data-collector"
-version = "0.5.7"
+version = "0.5.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

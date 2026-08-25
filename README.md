@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.7 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.8 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -190,3 +190,8 @@ v0.5.7 将 107 的单连接 ready 镜像改为 4 条互斥 rsync lane：先同�
 再按 chunk 字节数做确定性 LPT 分配，所有 lane 成功后才进入原有 SHA、fsync、原子发布和 ACK。
 任一 lane 失败不会清理已有 staging 或授权 Vultr GC。相同 60 秒公网 A/B 中，1/2/4 连接总吞吐为
 `0.694/1.131/1.712 MB/s`，4 连接相对单连接提高约 147%。
+
+v0.5.8 优化 107 durable 阶段：staging 和 raw 同属 `/home` 共享文件系统时，先对 staging 文件
+fsync 并完成一次 SHA-256，再原子 rename 为永久 raw，删除 staging→raw 全量复制和复制后的第二次
+读取。raw 已存在的 crash-recovery 路径不再下载数据，但仍重新校验 SHA 后补 ACK；跨设备部署自动
+回退到复制路径。

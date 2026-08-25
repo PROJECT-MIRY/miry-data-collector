@@ -20,7 +20,12 @@ from miry.contracts.models import (
 )
 from miry.contracts.serde import canonical_json_bytes, sha256_bytes
 from miry.pipeline.config import PullConfig
-from miry.pipeline.pull import Puller, RsyncTransport, safe_remote_root
+from miry.pipeline.pull import (
+    FilesystemRemoteStore,
+    Puller,
+    RsyncTransport,
+    safe_remote_root,
+)
 from miry.transfer import TransferJournal
 
 HASH = "a" * 64
@@ -39,6 +44,16 @@ class MemoryRemote:
 
     def download(self, remote_path: str, local_file: BinaryIO) -> None:
         local_file.write(self.files[remote_path])
+
+    def promote(
+        self,
+        remote_path: str,
+        destination: Path,
+        *,
+        size_bytes: int,
+        sha256: str,
+    ) -> bool:
+        return False
 
     def write_atomic(self, path: str, content: bytes) -> None:
         self.writes[path] = content
@@ -79,6 +94,37 @@ def test_hash_mismatch_never_acknowledges(tmp_path: Path) -> None:
     assert result.new_chunks == 0
     assert len(result.failures) == 1
     assert f"control/acks/{manifest.chunk_id}.ack.json" not in remote.writes
+
+
+def test_filesystem_staging_promotes_verified_chunk_without_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    remote, manifest = _remote_fixture(b"durable staged data")
+    staging = tmp_path / "staging"
+    for relative, content in remote.files.items():
+        path = staging / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    def unexpected_copy(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("same-filesystem staging must be renamed, not copied")
+
+    monkeypatch.setattr("miry.pipeline.pull.shutil.copyfileobj", unexpected_copy)
+    raw = tmp_path / "raw"
+
+    result = Puller(
+        FilesystemRemoteStore(staging),
+        remote_ready_root="ready",
+        remote_ack_root="control/acks",
+        local_raw_root=raw,
+    ).run()
+
+    destination = raw / f"collector={manifest.collector_id}" / manifest.data_path
+    assert result.new_chunks == 1
+    assert result.failures == ()
+    assert destination.read_bytes() == b"durable staged data"
+    assert not (staging / "ready" / manifest.data_path).exists()
+    assert (staging / f"control/acks/{manifest.chunk_id}.ack.json").exists()
 
 
 def test_interrupted_rsync_temporary_manifests_are_ignored(tmp_path: Path) -> None:
@@ -290,6 +336,35 @@ def test_parallel_rsync_failure_keeps_existing_staging(
         transport.pull_ready()
 
     assert staged.read_bytes() == b"keep until a complete remote inventory is downloaded"
+
+
+def test_parallel_plan_skips_data_already_durable_in_raw(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _pull_config(tmp_path)
+    transport = RsyncTransport(config)
+    inventory = config.local_staging_root / "inventory/ready"
+    data = b"already durable"
+    _remote, manifest = _remote_fixture(data)
+    durable = config.local_raw_root / f"collector={manifest.collector_id}" / manifest.data_path
+    durable.parent.mkdir(parents=True)
+    durable.write_bytes(data)
+    lane_calls = 0
+
+    def run(_self: RsyncTransport, *arguments: str) -> None:
+        nonlocal lane_calls
+        if "--delete-excluded" in arguments:
+            path = inventory / "date=2026-08-10/writer=depth/chunk-test.manifest.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(canonical_json_bytes(manifest))
+            return
+        lane_calls += 1
+
+    monkeypatch.setattr(RsyncTransport, "_run", run)
+
+    transport.pull_ready()
+
+    assert lane_calls == 0
 
 
 @pytest.mark.parametrize("value", ("", "ready\nother", "ready\x00other"))

@@ -11,6 +11,7 @@ import pytest
 from miry.collector.rest import BinanceRestClient
 from miry.collector.websocket import (
     BinanceWebSocketConnection,
+    SnapshotBridgeError,
     SourceIdentity,
     decode_websocket,
 )
@@ -155,9 +156,9 @@ class RecoveryWebSocket:
                 "data": {
                     "e": "depthUpdate",
                     "s": "BTCUSDT",
-                    "U": 2,
+                    "U": 1,
                     "u": 2,
-                    "pu": 1,
+                    "pu": 0,
                     "b": [],
                     "a": [],
                 },
@@ -178,6 +179,26 @@ class BlockingSnapshotRest:
         self.started.set()
         await self.release.wait()
         return b'{"lastUpdateId":1,"bids":[],"asks":[]}', 1, 2, "snapshot"
+
+
+class SequencedSnapshotRest:
+    def __init__(self, update_ids: tuple[int, ...]) -> None:
+        self.update_ids = list(update_ids)
+        self.calls = 0
+
+    async def fetch_snapshot(
+        self, path: str, *, symbol: str
+    ) -> tuple[bytes, int, int, str]:
+        assert path == "/fapi/v1/depth"
+        assert symbol == "BTCUSDT"
+        update_id = self.update_ids.pop(0)
+        self.calls += 1
+        return (
+            orjson.dumps({"lastUpdateId": update_id, "bids": [], "asks": []}),
+            self.calls,
+            self.calls + 1,
+            f"snapshot-{self.calls}",
+        )
 
 
 class RecordingIngest:
@@ -1012,11 +1033,12 @@ async def test_transport_recovers_before_l2_snapshots_finish(
 
     task = asyncio.create_task(connection.run())
     try:
-        await asyncio.wait_for(rest.started.wait(), timeout=0.5)
         await asyncio.wait_for(websocket.waiting_for_depth.wait(), timeout=0.5)
+        assert not rest.started.is_set(), "snapshot started before the diff buffer"
         assert not transport_ready.is_set()
         websocket.release_depth.set()
         await asyncio.wait_for(transport_ready.wait(), timeout=0.5)
+        await asyncio.wait_for(rest.started.wait(), timeout=0.5)
         assert not snapshot_ready.is_set()
         rest.release.set()
         await asyncio.wait_for(snapshot_ready.wait(), timeout=0.5)
@@ -1024,6 +1046,80 @@ async def test_transport_recovers_before_l2_snapshots_finish(
         stop.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_retries_until_the_buffered_diff_officially_bridges() -> None:
+    rest = SequencedSnapshotRest((50, 102))
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@depth@100ms",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(("BTCUSDT", StreamType.DEPTH_SNAPSHOT),),
+        rest=rest,  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=asyncio.Event(),
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+    )
+    await connection._observe_depth_update(
+        StreamType.DEPTH,
+        "BTCUSDT",
+        {"U": 100, "u": 105, "pu": 99},
+        1,
+        1,
+    )
+
+    await connection._recover_snapshot_bridge("BTCUSDT", StreamType.DEPTH_SNAPSHOT)
+
+    assert rest.calls == 2
+    assert connection._bridges[(StreamType.DEPTH, "BTCUSDT")].is_bridged
+
+
+@pytest.mark.asyncio
+async def test_five_stale_snapshots_escalate_without_declaring_l2_ready() -> None:
+    rest = SequencedSnapshotRest((50, 51, 52, 53, 54))
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@depth@100ms",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(("BTCUSDT", StreamType.DEPTH_SNAPSHOT),),
+        rest=rest,  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=asyncio.Event(),
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+    )
+    await connection._observe_depth_update(
+        StreamType.DEPTH,
+        "BTCUSDT",
+        {"U": 100, "u": 105, "pu": 99},
+        1,
+        1,
+    )
+
+    with pytest.raises(SnapshotBridgeError, match="did not bridge after 5 attempts"):
+        await connection._recover_snapshot_bridge(
+            "BTCUSDT", StreamType.DEPTH_SNAPSHOT
+        )
+
+    assert rest.calls == 5
+    assert not connection._bridges[(StreamType.DEPTH, "BTCUSDT")].is_bridged
+    assert ("BTCUSDT", StreamType.DEPTH_SNAPSHOT) in connection._snapshot_pending
 
 
 @pytest.mark.asyncio

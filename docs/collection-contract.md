@@ -99,13 +99,18 @@ gap 保持 OPEN，并按 30/60/120/300 秒退避后台重试，不阻断 UTC 日
 WebSocket 30 秒无任何消息会重连整个异常连接。每个币的 `depth` 与 `bookTicker` 分别以 30 秒
 保守阈值监控，`markPrice@1s` 以 15 秒监控；超时只重订阅准确的 `(stream, symbol)`，并从最后已
 证明事件时刻打开 symbol/stream-scoped `CONNECTION_LOST_GAP`。控制 ACK 使用独立 20 秒 deadline；
-请求在本机等待 audit/control 锁时不消耗该预算。snapshot completion 最长等待 180 秒；ACK 不代表恢复，必须看到对应 stream 的第一条新事件才关闭
-scoped gap，L2 validity 还必须等待 snapshot bridge。同一活跃连接连续两次局部恢复失败时才重建所属 route，并为该 route
+请求在本机等待 audit/control 锁时不消耗该预算。ACK 不代表恢复，必须看到对应 stream 的第一条新
+事件才关闭 transport gap。L2 独立使用官方 local-order-book 协议：先缓存 diff，snapshot 返回后
+丢弃 `u < lastUpdateId` 的事件，第一条保留事件必须满足 `U <= lastUpdateId <= u`，以后每条必须满足
+`pu == previous.u`。HTTP 成功只记为 `snapshot fetched`；只有 overlap 与后续连续性得到证明才记为
+`snapshot bridged`。snapshot 太旧或落在事件之间时只重抓准确的 symbol，并由共享 REST scheduler
+限速；连续 5 次不能 bridge 时重建所属 route。transport 恢复后到全部 bridge 前保持独立的
+`L2_REANCHOR_GAP` OPEN。同一活跃连接连续两次局部恢复失败时才重建所属 route，并为该 route
 被主动中断的全部 symbol/stream 打开 transport gap；其他 route、REST poller 和 writer 继续工作。
 每条连接每 60 秒执行一次 `LIST_SUBSCRIPTIONS`，单次响应 deadline 为 20 秒；集合不一致立即失败，
 但无响应必须连续发生 3 次才使当前 route 连接失败，gap 从上一次成功审计的 proof timestamp 起算。`aggTrade`、`forceOrder` 和
 `contractInfo` 因天然稀疏不使用事件 deadline。L2 `pu/u` 不连续时单独记录
-`L2_SEQUENCE_GAP` 并重新取 snapshot。
+`L2_SEQUENCE_GAP` 并重新取 snapshot；该 gap 也只能在实际 bridge 后关闭。
 
 前一日 seal 延迟 150 秒，确保 30/60/120 秒监控发现的 affected interval 能先进入 day inventory。
 collector 每 30 秒写 lease；若上次启动没有 clean shutdown，下次启动会从 depth 与 market/trades

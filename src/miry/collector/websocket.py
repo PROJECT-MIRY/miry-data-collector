@@ -19,10 +19,16 @@ from miry.collector.ws_control import (
     SubscriptionUpdate,
 )
 from miry.contracts.models import RawEvent, StreamType
+from miry.orderbook.bridge import BridgeStatus, SnapshotBridgeTracker, UpdateSpan
 
 logger = logging.getLogger(__name__)
 
 RECEIVE_FAIRNESS_BATCH = 64
+SNAPSHOT_BRIDGE_ATTEMPTS = 5
+
+
+class SnapshotBridgeError(OSError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,7 +163,8 @@ class BinanceWebSocketConnection:
         )
         self._transport_pending = set(transport_ready_keys)
         self._initial_subscription_acknowledged = False
-        self._previous_u: dict[tuple[StreamType, str], int] = {}
+        self._bridges: dict[tuple[StreamType, str], SnapshotBridgeTracker] = {}
+        self._bridge_changed: dict[tuple[StreamType, str], asyncio.Event] = {}
         self._resync_tasks: dict[tuple[StreamType, str], asyncio.Task[None]] = {}
         self._snapshot_pending = set(snapshot_requests)
         self._last_receive_monotonic = time.monotonic()
@@ -294,8 +301,12 @@ class BinanceWebSocketConnection:
                 and decoded.symbol
                 and decoded.data is not None
             ):
-                await self._check_depth_sequence(
-                    decoded.stream_type, decoded.symbol, decoded.data, realtime_ns
+                await self._observe_depth_update(
+                    decoded.stream_type,
+                    decoded.symbol,
+                    decoded.data,
+                    realtime_ns,
+                    event.receive_seq,
                 )
             received_since_yield += 1
             if received_since_yield >= RECEIVE_FAIRNESS_BATCH:
@@ -337,8 +348,12 @@ class BinanceWebSocketConnection:
     ) -> None:
         self._snapshot_pending.update(requests)
         try:
-            for symbol, stream_type in requests:
-                await self._fetch_snapshot(symbol, stream_type)
+            await asyncio.gather(
+                *(
+                    self._recover_snapshot_bridge(symbol, stream_type)
+                    for symbol, stream_type in requests
+                )
+            )
             if not completion.done():
                 completion.set_result(None)
         except BaseException as exc:
@@ -347,10 +362,16 @@ class BinanceWebSocketConnection:
             raise
 
     async def _fetch_snapshots(self) -> None:
-        for symbol, stream_type in self._snapshot_requests:
-            await self._fetch_snapshot(symbol, stream_type)
+        await asyncio.gather(
+            *(
+                self._recover_snapshot_bridge(symbol, stream_type)
+                for symbol, stream_type in self._snapshot_requests
+            )
+        )
 
-    async def _fetch_snapshot(self, symbol: str, stream_type: StreamType) -> None:
+    async def _fetch_snapshot(
+        self, symbol: str, stream_type: StreamType, *, bridge_attempt: int
+    ) -> int:
         delay = 1.0
         for attempt in range(5):
             try:
@@ -371,45 +392,155 @@ class BinanceWebSocketConnection:
                 await self._ingest.put(event)
                 logger.info(
                     "snapshot fetched connection_id=%s symbol=%s stream=%s latency_ms=%.3f "
-                    "attempt=%d",
+                    "http_attempt=%d bridge_attempt=%d",
                     self._identity.connection_id,
                     symbol,
                     stream_type.value,
                     (observed_at - requested_at) / 1_000_000,
                     attempt + 1,
+                    bridge_attempt,
                 )
-                self._snapshot_pending.discard((symbol, stream_type))
-                return
+                decoded = orjson.loads(payload)
+                if not isinstance(decoded, dict):
+                    raise ValueError("depth snapshot is not an object")
+                return int(decoded["lastUpdateId"])
             except (aiohttp.ClientError, TimeoutError):
                 if attempt == 4:
                     raise
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 10)
+        raise AssertionError("snapshot HTTP retry loop did not return or raise")
 
-    async def _check_depth_sequence(
+    async def _recover_snapshot_bridge(
+        self, symbol: str, snapshot_type: StreamType
+    ) -> None:
+        stream_type = _stream_type_for_snapshot(snapshot_type)
+        key = (stream_type, symbol)
+        tracker = self._bridges.setdefault(key, SnapshotBridgeTracker())
+        changed = self._bridge_changed.setdefault(key, asyncio.Event())
+        self._snapshot_pending.add((symbol, snapshot_type))
+        for bridge_attempt in range(1, SNAPSHOT_BRIDGE_ATTEMPTS + 1):
+            await self._wait_for_depth_buffer(tracker, changed, symbol, stream_type)
+            last_update_id = await self._fetch_snapshot(
+                symbol, snapshot_type, bridge_attempt=bridge_attempt
+            )
+            result = tracker.on_snapshot(last_update_id)
+            if result.status is BridgeStatus.BRIDGED:
+                self._snapshot_pending.discard((symbol, snapshot_type))
+                logger.info(
+                    "snapshot bridged connection_id=%s symbol=%s stream=%s "
+                    "last_update_id=%d bridge_attempt=%d",
+                    self._identity.connection_id,
+                    symbol,
+                    snapshot_type.value,
+                    last_update_id,
+                    bridge_attempt,
+                )
+                return
+            if result.status is BridgeStatus.STALE_SNAPSHOT:
+                logger.warning(
+                    "snapshot rejected stale connection_id=%s symbol=%s stream=%s "
+                    "last_update_id=%d bridge_attempt=%d",
+                    self._identity.connection_id,
+                    symbol,
+                    snapshot_type.value,
+                    last_update_id,
+                    bridge_attempt,
+                )
+                continue
+            try:
+                await self._wait_for_snapshot_decision(tracker, changed)
+            except TimeoutError:
+                logger.warning(
+                    "snapshot bridge wait timed out connection_id=%s symbol=%s stream=%s "
+                    "last_update_id=%d bridge_attempt=%d",
+                    self._identity.connection_id,
+                    symbol,
+                    snapshot_type.value,
+                    last_update_id,
+                    bridge_attempt,
+                )
+                tracker.invalidate()
+                continue
+            if tracker.is_bridged:
+                self._snapshot_pending.discard((symbol, snapshot_type))
+                logger.info(
+                    "snapshot bridged connection_id=%s symbol=%s stream=%s "
+                    "last_update_id=%d bridge_attempt=%d",
+                    self._identity.connection_id,
+                    symbol,
+                    snapshot_type.value,
+                    last_update_id,
+                    bridge_attempt,
+                )
+                return
+        raise SnapshotBridgeError(
+            f"snapshot did not bridge after {SNAPSHOT_BRIDGE_ATTEMPTS} attempts "
+            f"connection_id={self._identity.connection_id} symbol={symbol}"
+        )
+
+    async def _wait_for_depth_buffer(
+        self,
+        tracker: SnapshotBridgeTracker,
+        changed: asyncio.Event,
+        symbol: str,
+        stream_type: StreamType,
+    ) -> None:
+        while not tracker.has_events:
+            changed.clear()
+            if tracker.has_events:
+                return
+            try:
+                await asyncio.wait_for(
+                    changed.wait(), timeout=self._receive_timeout_seconds
+                )
+            except TimeoutError as exc:
+                raise SnapshotBridgeError(
+                    "no depth event available before snapshot "
+                    f"connection_id={self._identity.connection_id} "
+                    f"symbol={symbol} stream={stream_type.value}"
+                ) from exc
+
+    async def _wait_for_snapshot_decision(
+        self, tracker: SnapshotBridgeTracker, changed: asyncio.Event
+    ) -> None:
+        async with asyncio.timeout(self._receive_timeout_seconds):
+            while tracker.snapshot_last_update_id is not None and not tracker.is_bridged:
+                changed.clear()
+                if tracker.snapshot_last_update_id is None or tracker.is_bridged:
+                    return
+                await changed.wait()
+
+    async def _observe_depth_update(
         self,
         stream_type: StreamType,
         symbol: str,
         data: dict[str, Any],
         received_realtime_ns: int,
+        receive_seq: int,
     ) -> None:
-        previous = int(data["pu"])
-        final = int(data["u"])
         key = (stream_type, symbol)
-        expected = self._previous_u.get(key)
-        self._previous_u[key] = final
-        snapshot_type = (
-            StreamType.RPI_DEPTH_SNAPSHOT
-            if stream_type is StreamType.RPI_DEPTH
-            else StreamType.DEPTH_SNAPSHOT
+        tracker = self._bridges.setdefault(key, SnapshotBridgeTracker())
+        result = tracker.on_diff(
+            UpdateSpan(
+                receive_seq=receive_seq,
+                first_update_id=int(data["U"]),
+                final_update_id=int(data["u"]),
+                previous_final_update_id=int(data["pu"]),
+            )
         )
+        self._bridge_changed.setdefault(key, asyncio.Event()).set()
+        snapshot_type = _snapshot_type_for_stream(stream_type)
         if (
-            expected is None
-            or previous == expected
+            result.status is not BridgeStatus.SEQUENCE_GAP
             or key in self._resync_tasks
             or (symbol, snapshot_type) in self._snapshot_pending
         ):
             return
+        expected = result.expected_previous_update_id
+        previous = result.received_previous_update_id
+        if expected is None or previous is None:
+            raise AssertionError("sequence gap result omitted update IDs")
         gap_id = await self._on_depth_gap(
             self._identity.connection_id,
             symbol,
@@ -418,9 +549,8 @@ class BinanceWebSocketConnection:
             previous,
             received_realtime_ns,
         )
-
         async def reanchor() -> None:
-            await self._fetch_snapshot(symbol, snapshot_type)
+            await self._recover_snapshot_bridge(symbol, snapshot_type)
             await self._on_depth_reanchored(gap_id, symbol, stream_type)
 
         task = asyncio.create_task(
@@ -469,6 +599,22 @@ def _peer_text(value: object) -> str:
     if isinstance(value, tuple) and len(value) >= 2:
         return f"{value[0]}:{value[1]}"
     return str(value) if value is not None else "unknown"
+
+
+def _snapshot_type_for_stream(stream_type: StreamType) -> StreamType:
+    if stream_type is StreamType.DEPTH:
+        return StreamType.DEPTH_SNAPSHOT
+    if stream_type is StreamType.RPI_DEPTH:
+        return StreamType.RPI_DEPTH_SNAPSHOT
+    raise ValueError(f"stream has no snapshot type: {stream_type.value}")
+
+
+def _stream_type_for_snapshot(snapshot_type: StreamType) -> StreamType:
+    if snapshot_type is StreamType.DEPTH_SNAPSHOT:
+        return StreamType.DEPTH
+    if snapshot_type is StreamType.RPI_DEPTH_SNAPSHOT:
+        return StreamType.RPI_DEPTH
+    raise ValueError(f"unsupported snapshot type: {snapshot_type.value}")
 
 
 def public_subscriptions(instruments: tuple[str, ...], *, d0_enabled: bool) -> tuple[str, ...]:

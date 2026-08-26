@@ -367,6 +367,7 @@ class RouteRunner:
     async def run(self) -> None:
         current: ConnectionHandle | None = None
         gap_id: str | None = None
+        l2_gap_id: str | None = None
         gap_reason = GapReason.CONNECTION_LOST
         recovery_started_at: float | None = None
         transport_recovered_at: float | None = None
@@ -398,13 +399,18 @@ class RouteRunner:
                     current = await self._start_ready_connection(
                         on_transport_ready=on_transport_ready
                     )
+                    if l2_gap_id is not None:
+                        await self._close_l2_reanchor_gap(
+                            l2_gap_id, current.identity.connection_id
+                        )
+                        l2_gap_id = None
                     self._activate_connection()
                     active_since = time.monotonic()
                     self._on_ready(self._name)
                     if transport_recovered_at is not None:
                         now = time.monotonic()
                         logger.info(
-                            "connection snapshot ready route=%s connection_id=%s "
+                            "connection L2 bridged route=%s connection_id=%s "
                             "reanchor_s=%.3f total_recovery_s=%.3f",
                             self._name,
                             current.identity.connection_id,
@@ -423,6 +429,8 @@ class RouteRunner:
                         recovery_started_at = time.monotonic()
                         transport_recovered_at = None
                         gap_id = await self._open_gap(gap_reason, str(exc))
+                        if l2_gap_id is None:
+                            l2_gap_id = await self._open_l2_reanchor_gap(str(exc))
                     await self._queues.wait_until_resumable()
                     continue
                 except asyncio.CancelledError:
@@ -437,6 +445,11 @@ class RouteRunner:
                             str(exc),
                             affected_from_realtime_ns=_error_affected_from(exc),
                         )
+                        if l2_gap_id is None:
+                            l2_gap_id = await self._open_l2_reanchor_gap(
+                                str(exc),
+                                affected_from_realtime_ns=_error_affected_from(exc),
+                            )
                     reconnect_failures += 1
                     await self._wait_or_stop(_reconnect_delay(reconnect_failures))
                     continue
@@ -465,6 +478,12 @@ class RouteRunner:
                     connection_id=current.identity.connection_id,
                     affected_from_realtime_ns=_error_affected_from(error),
                 )
+                if l2_gap_id is None:
+                    l2_gap_id = await self._open_l2_reanchor_gap(
+                        str(error or "connection closed"),
+                        connection_id=current.identity.connection_id,
+                        affected_from_realtime_ns=_error_affected_from(error),
+                    )
                 logger.warning(
                     "connection %s route=%s connection_id=%s gap_id=%s error=%s",
                     "failed" if outcome == "failed" else "reconnect requested",
@@ -638,7 +657,55 @@ class RouteRunner:
             GapReason.L2_SEQUENCE,
             exchange_symbols=(symbol,),
             stream_types=(stream_type,),
-            detail="fresh snapshot received; L2 reconstruction must still validate the bridge",
+            detail="snapshot bridge verified for the active depth sequence",
+        )
+
+    async def _open_l2_reanchor_gap(
+        self,
+        detail: str,
+        *,
+        connection_id: str | None = None,
+        affected_from_realtime_ns: int | None = None,
+    ) -> str | None:
+        stream_types = tuple(
+            stream_type
+            for stream_type in self._stream_types
+            if stream_type in {StreamType.DEPTH, StreamType.RPI_DEPTH}
+        )
+        if not stream_types:
+            return None
+        affected_from_ns = affected_from_realtime_ns
+        if affected_from_ns is None:
+            affected_from_ns = min(
+                (
+                    observed[1]
+                    for key, observed in self._last_event.items()
+                    if key[0] in stream_types
+                ),
+                default=time.time_ns(),
+            )
+        return await self._gaps.open(
+            GapReason.L2_REANCHOR,
+            connection_id=connection_id,
+            exchange_symbols=self._instruments,
+            stream_types=stream_types,
+            affected_from_realtime_ns=affected_from_ns,
+            detail=f"{self._name}: {detail}"[:500],
+        )
+
+    async def _close_l2_reanchor_gap(self, gap_id: str, connection_id: str) -> None:
+        stream_types = tuple(
+            stream_type
+            for stream_type in self._stream_types
+            if stream_type in {StreamType.DEPTH, StreamType.RPI_DEPTH}
+        )
+        await self._gaps.close(
+            gap_id,
+            GapReason.L2_REANCHOR,
+            connection_id=connection_id,
+            exchange_symbols=self._instruments,
+            stream_types=stream_types,
+            detail=f"{self._name} snapshot bridges verified",
         )
 
     async def _wait_current(self, handle: ConnectionHandle) -> str:

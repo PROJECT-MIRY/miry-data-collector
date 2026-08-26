@@ -215,9 +215,10 @@ sudo find /srv/miry-data-rsync/control/open-gaps -type f -maxdepth 1 -print
 ```
 
 异常重连时，`connection transport recovered ... recovery_s=` 表示订阅 ACK 与受监控 stream
-首事件已经证明 raw transport 恢复；`connection snapshot ready ... reanchor_s=` 表示该路由的
-所有快照已经捕获。两者之间 L2 仍由 central 保持无效，直到每个币自己的 snapshot bridge
-通过，不能把 transport 日志解释为盘口已经有效。
+首事件已经证明 raw transport 恢复；`snapshot fetched ...` 只表示 REST 响应已经进入 raw，不能证明
+盘口有效。`snapshot bridged ...` 是单币通过官方 overlap 的证明，`connection L2 bridged ...` 才表示
+该 route 的所有币都完成 reanchor。两者之间 `L2_REANCHOR_GAP` 保持 OPEN；如果 snapshot 太旧，日志
+会出现 `snapshot rejected stale ... bridge_attempt=` 并在全局 REST 限速器下重抓准确的 symbol。
 
 暂停自动选币时，把 `automation_enabled` 改为 `false` 并重启 collector；采集仍继续，core
 不能通过手工 override 直接修改。

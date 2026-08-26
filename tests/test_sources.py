@@ -1321,9 +1321,11 @@ async def test_snapshot_failure_after_transport_recovery_opens_a_new_gap(
 
     assert gaps.opened == [
         ("gap-1", GapReason.CONNECTION_LOST, "connection-1"),
-        ("gap-2", GapReason.CONNECTION_LOST, None),
+        ("gap-2", GapReason.L2_REANCHOR, "connection-1"),
+        ("gap-3", GapReason.CONNECTION_LOST, None),
     ]
     assert gaps.closed == [
         ("gap-1", GapReason.CONNECTION_LOST, "connection-2"),
-        ("gap-2", GapReason.CONNECTION_LOST, "connection-3"),
+        ("gap-3", GapReason.CONNECTION_LOST, "connection-3"),
+        ("gap-2", GapReason.L2_REANCHOR, "connection-3"),
     ]

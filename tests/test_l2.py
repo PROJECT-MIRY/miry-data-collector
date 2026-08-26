@@ -62,6 +62,48 @@ def test_snapshot_bridge_duplicate_gap_and_reanchor() -> None:
     assert book.previous_update_id == 104
 
 
+def test_stale_snapshot_is_discarded_until_a_later_snapshot_overlaps() -> None:
+    book = ConnectionBook("captured-crv")
+    book.on_diff(
+        _diff(
+            1,
+            11380357872292,
+            11380357884118,
+            11380357868810,
+            connection="captured-crv",
+        )
+    )
+
+    assert (
+        book.on_snapshot(
+            DepthSnapshot(
+                "captured-crv",
+                2,
+                2,
+                11380356522031,
+                (("99", "1"),),
+                (("102", "1"),),
+            )
+        )
+        is None
+    )
+    assert book.anchor_last_update_id is None
+    assert book.state is L2State.UNANCHORED
+
+    change = book.on_snapshot(
+        DepthSnapshot(
+            "captured-crv",
+            3,
+            3,
+            11380357880000,
+            (("99", "1"),),
+            (("102", "1"),),
+        )
+    )
+
+    assert change is not None and change.state is L2State.VALID
+
+
 def test_unbridged_anchor_does_not_rescan_pending_for_every_new_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

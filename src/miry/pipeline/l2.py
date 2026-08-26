@@ -17,6 +17,12 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from miry.contracts.models import GapEvent, GapState, StreamType
 from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes
 from miry.contracts.symbols import validate_exchange_symbol
+from miry.orderbook.bridge import (
+    BridgeStatus,
+    UpdateSpan,
+    locate_snapshot_bridge,
+    sequence_continues,
+)
 
 
 class L2State(StrEnum):
@@ -174,7 +180,10 @@ class ConnectionBook:
             ):
                 return None
             return self._try_bridge()
-        if diff.previous_final_update_id != self.previous_update_id:
+        expected_previous = self.previous_update_id
+        if expected_previous is None:
+            raise AssertionError("valid L2 book omitted its previous update ID")
+        if not sequence_continues(expected_previous, diff.previous_final_update_id):
             self.invalidate()
             self.pending = [diff]
             return StateChange(
@@ -213,25 +222,43 @@ class ConnectionBook:
             for previous, current in pairwise(candidates)
         ):
             candidates = sorted(candidates, key=lambda diff: diff.receive_seq)
-        candidates = [
-            diff for diff in candidates if diff.final_update_id >= self.anchor_last_update_id
-        ]
-        bridge_index = next(
-            (
-                index
-                for index, diff in enumerate(candidates)
-                if diff.first_update_id <= self.anchor_last_update_id <= diff.final_update_id
+        decision = locate_snapshot_bridge(
+            self.anchor_last_update_id,
+            tuple(
+                UpdateSpan(
+                    receive_seq=diff.receive_seq,
+                    first_update_id=diff.first_update_id,
+                    final_update_id=diff.final_update_id,
+                    previous_final_update_id=diff.previous_final_update_id,
+                )
+                for diff in candidates
             ),
-            None,
         )
-        if bridge_index is None:
+        candidates = candidates[decision.discard_count :]
+        if decision.status is BridgeStatus.WAITING_FOR_EVENTS:
             self.pending = candidates
             return None
+        if decision.status is BridgeStatus.STALE_SNAPSHOT:
+            self.bids.clear()
+            self.asks.clear()
+            self.previous_update_id = None
+            self.anchor_last_update_id = None
+            self.anchor_received_ns = None
+            self.pending = candidates
+            return None
+        if decision.bridge_index is None:
+            raise AssertionError("bridged snapshot omitted its bridge index")
+        bridge_index = decision.bridge_index - decision.discard_count
 
         bridge = candidates[bridge_index]
         self._apply(bridge)
         for diff in candidates[bridge_index + 1 :]:
-            if diff.previous_final_update_id != self.previous_update_id:
+            expected_previous = self.previous_update_id
+            if expected_previous is None:
+                raise AssertionError("bridged L2 book omitted its previous update ID")
+            if not sequence_continues(
+                expected_previous, diff.previous_final_update_id
+            ):
                 self.invalidate()
                 self.pending = [diff]
                 return StateChange(

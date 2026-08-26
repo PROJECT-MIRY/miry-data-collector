@@ -8,6 +8,7 @@
 ```text
 src/miry/
   collector/  实时采集运行时
+  orderbook/  Binance L2 sequence 与 snapshot bridge 领域规则
   universe/   选币领域规则
   pipeline/   107 数据流水线
   contracts/  跨节点合同
@@ -32,6 +33,10 @@ spool/ACK GC，以及在线应用已经形成的 universe 决策。内部进一�
 `pipeline` 在 107 运行，负责 rsync pull、size/SHA-256 校验、ACK、raw 标准化、gap 有效性、L2 重建、
 审计和 retention。`pull.py` 持有完整传输事务，`day.py` 编排单日作业，`quality.py` 持有完成门槛和
 coverage 合同。它不排名、不生成候选名单，也不改变正式 60 币。
+
+`orderbook` 是 collector 与 pipeline 共享的纯领域层。它只实现 Binance 官方 snapshot overlap 和
+后续 `pu/u` 连续性，不访问网络、文件系统或 gap journal。collector 用它证明实时 reanchor，pipeline
+用同一实现回放 immutable raw；两端不得各自复制 bridge 条件。
 
 `cli` 只解析参数、配置日志并调用一个运行层函数；质量算法、transfer ledger、ACK 状态和业务决策
 不得放回 CLI。正式命令使用动作或精确对象名称：`collect`、`pull`、`process`、`override`、`select`、
@@ -59,9 +64,11 @@ coverage 合同。它不排名、不生成候选名单，也不改变正式 60 �
 ```text
 collector --> universe --> contracts
     |                         ^
+    +--> orderbook            |
     +-------------------------+
 
-pipeline --------------------> contracts
+pipeline --> orderbook
+    +------------------------> contracts
 cli ------> collector / universe / pipeline
 ```
 

@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.8
+## 2. 保留状态安装 v0.5.9
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换

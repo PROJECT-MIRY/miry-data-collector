@@ -8,8 +8,8 @@
 | 文档 | 用途 | 当前适用性 |
 | --- | --- | --- |
 | [系统架构与选币职责](architecture.md) | 模块边界、依赖方向和选币职责 | 当前 |
-| [正式采集与处理合同](collection-contract.md) | 数据源、完整性、质量门槛和性能合同 | v0.5.8 |
-| [端到端部署指南](deployment.md) | Vultr 与校园 107 的部署顺序和验收 | v0.5.8 |
+| [正式采集与处理合同](collection-contract.md) | 数据源、完整性、质量门槛和性能合同 | v0.5.9 |
+| [端到端部署指南](deployment.md) | Vultr 与校园 107 的部署顺序和验收 | v0.5.9 |
 | [Public WebSocket 流量均衡](traffic-balancing.md) | 路由负载观测和限幅在线再均衡规则 | 当前 |
 | [ACK 传输审计与恢复合同](transfer-ack-contract.md) | raw 传输、ACK、远端 GC 和审计状态 | 当前 |
 
@@ -27,6 +27,7 @@
 | 2026-08-24 | [NautilusTrader 与 HftBacktest 接入](2026-08-24-backtest-framework-integration-assessment.md) | 评估 |
 | 2026-08-24 | [08-22 之后的数据完整性与分钟策略质量规则](2026-08-24-data-integrity-and-minute-policy-assessment.md) | 评估 |
 | 2026-08-25 | [Gap 根因与 v0.5.4 稳定性修复](2026-08-25-gap-root-cause-and-v0.5.4-assessment.md) | 事故评估 |
+| 2026-08-26 | [L2 snapshot bridge 卡死与恢复](2026-08-26-l2-snapshot-bridge-recovery.md) | 事故修复 |
 
 ## 版本与事故背景
 

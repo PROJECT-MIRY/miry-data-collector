@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.8 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.9 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -23,14 +23,15 @@ ACK 和 Slurm 处理，不参与选币。成员不变的 UTC 日切不会停止�
 ```text
 src/miry/
   collector/  Vultr 实时连接、采集、gap、writer 和 spool
+  orderbook/  collector 与 pipeline 共享的 canonical L2 bridge
   universe/   与部署位置无关的证据解析、排名和选币规则
   pipeline/   107 pull、normalize、L2 重建和 retention
   contracts/  两端共享的不可变数据合同
   cli/        命令行入口，只做参数解析和依赖装配
 ```
 
-依赖只允许从运行层指向领域/合同层：`collector -> universe -> contracts`，以及
-`pipeline -> contracts`。`universe` 不导入 `collector` 或 `pipeline`。完整权衡见
+依赖只允许从运行层指向领域/合同层：collector 与 pipeline 共用纯 `orderbook` bridge，
+`collector -> universe -> contracts`，`pipeline -> contracts`。领域层不反向导入运行层。完整权衡见
 [架构与选币职责](docs/architecture.md)。
 
 完整文档分类和适用性见 [文档索引](docs/README.md)。
@@ -195,3 +196,10 @@ v0.5.8 优化 107 durable 阶段：staging 和 raw 同属 `/home` 共享文件�
 fsync 并完成一次 SHA-256，再原子 rename 为永久 raw，删除 staging→raw 全量复制和复制后的第二次
 读取。raw 已存在的 crash-recovery 路径不再下载数据，但仍重新校验 SHA 后补 ACK；跨设备部署自动
 回退到复制路径。
+
+v0.5.9 修复 snapshot HTTP 成功被误当作 L2 ready 的问题。collector 与 pipeline 共用 Binance 官方
+`U <= lastUpdateId <= u`、后续 `pu == previous.u` 状态机；collector 先缓存 diff，stale/non-overlap
+snapshot 按币最多重抓 5 次，仍失败才升级为 route reconnect。transport 恢复到全部 symbol bridge
+之间使用独立 `L2_REANCHOR_GAP`，不会再把小时级 unanchored 窗口隐藏在已关闭的 transport gap 后。
+事故证据和历史不可恢复边界见
+[2026-08-25 L2 snapshot bridge 卡死诊断与修复合同](docs/2026-08-26-l2-snapshot-bridge-recovery.md)。

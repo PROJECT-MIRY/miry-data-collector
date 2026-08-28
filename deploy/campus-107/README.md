@@ -194,7 +194,8 @@ normalize (4 parse workers + 1 ordered reducer / 24GiB)
   -> finalize (1 CPU / 2GiB)
 ```
 
-partition 为每个 symbol 生成一个带逐文件 SHA-256 的持久 Parquet，并按行数从大到小生成 array
+partition 按共享 `miry.market-data/l2-symbol-projection/v1` schema 为每个 symbol 生成一个带逐文件
+SHA-256 的持久 Parquet，并按行数从大到小生成 array
 schedule，使重币先运行、减少尾部等待。每个 L2 task 只打开自己的一个输入文件；finalize 不删除
 该 projection，供下游研究直接按 symbol 裁剪，避免再次扫描整日 typed partition。检查进度：
 

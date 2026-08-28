@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import pyarrow as pa
 
+L2_SYMBOL_PROJECTION_SCHEMA_ID = "miry.market-data/l2-symbol-projection/v1"
+L2_SYMBOL_PROJECTION_SCHEMA_HASH = (
+    "sha256:0abce83b16927e16f7e681c42a1032901e9aa994610c0149666467e05450d293"
+)
+
 BOOK_LEVEL = pa.struct(
     [
         pa.field("price", pa.string(), nullable=False),

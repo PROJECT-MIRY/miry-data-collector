@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from miry.contracts.models import GapEvent, GapState, StreamType
 from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes, sha256_file
 from miry.contracts.symbols import validate_exchange_symbol
+from miry.contracts.typed import (
+    L2_SYMBOL_PROJECTION_SCHEMA_HASH,
+    L2_SYMBOL_PROJECTION_SCHEMA_ID,
+)
 from miry.orderbook.bridge import (
     BridgeStatus,
     UpdateSpan,
@@ -686,6 +690,8 @@ def partitioned_l2_input(
     path = cache_root / f"symbol={exchange_symbol}.parquet"
     if (
         marker.get("schema_version") != 3
+        or marker.get("schema_id") != L2_SYMBOL_PROJECTION_SCHEMA_ID
+        or marker.get("schema_hash") != L2_SYMBOL_PROJECTION_SCHEMA_HASH
         or marker.get("layout") != "PER_SYMBOL_L2_CAUSAL_V1"
         or marker.get("persistent_for_downstream") is not True
         or marker.get("collector_id") != collector_id

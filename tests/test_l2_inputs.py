@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -7,10 +8,15 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from miry.contracts.typed import (
+    L2_SYMBOL_PROJECTION_SCHEMA_HASH,
+    L2_SYMBOL_PROJECTION_SCHEMA_ID,
+)
 from miry.pipeline.day import reconstruct_l2_day
 from miry.pipeline.l2 import partitioned_l2_input
 
 BUILDER = Path(__file__).parents[1] / "deploy/campus-107/build-l2-inputs.py"
+SCHEMA = Path(__file__).parents[1] / "schemas/l2-symbol-projection-v1.schema.json"
 
 
 def test_partitioned_l2_inputs_preserve_symbol_order(tmp_path: Path) -> None:
@@ -51,44 +57,17 @@ def test_partitioned_l2_inputs_preserve_symbol_order(tmp_path: Path) -> None:
     assert marker["total_rows"] == 61
     assert marker["ignored_rows"] == {"OUTUSDT": 1}
     assert marker["schema_version"] == 3
+    assert marker["schema_id"] == L2_SYMBOL_PROJECTION_SCHEMA_ID
+    assert marker["schema_hash"] == L2_SYMBOL_PROJECTION_SCHEMA_HASH
+    assert "sha256:" + hashlib.sha256(SCHEMA.read_bytes()).hexdigest() == marker["schema_hash"]
     assert marker["layout"] == "PER_SYMBOL_L2_CAUSAL_V1"
     assert marker["persistent_for_downstream"] is True
     assert len(marker["files"][symbols[0]]["sha256"]) == 64
+    assert marker["typed_source_file_set_hash"].startswith("sha256:")
+    assert len(marker["typed_source_files"]) == 1
     assert marker["schedule"][0] == symbols[0]
     assert "exchange_symbol" not in selected[0]
     assert [row["receive_seq"] for row in selected] == [1, 100]
-
-
-def test_l2_input_cleanup_removes_only_a_valid_cache(tmp_path: Path) -> None:
-    symbols = [f"S{index:02d}USDT" for index in range(60)]
-    derived_root = tmp_path / "derived"
-    typed_root = derived_root / "typed/collector=tokyo01/date=2026-08-10"
-    typed_root.mkdir(parents=True)
-    pq.write_table(
-        pa.Table.from_pylist(
-            [_row(symbol, "depth", index + 1) for index, symbol in enumerate(symbols)]
-        ),
-        typed_root / "chunk.typed.parquet",
-    )
-    (typed_root / "_NORMALIZED.json").write_text(
-        json.dumps(
-            {
-                "collector_id": "tokyo01",
-                "utc_date": "2026-08-10",
-                "expected_symbols": symbols,
-            }
-        ),
-        encoding="ascii",
-    )
-    builder = _load_builder("build_l2_inputs_cleanup")
-    builder.build_l2_inputs(
-        derived_root=derived_root, collector="tokyo01", utc_date="2026-08-10"
-    )
-
-    assert builder.cleanup_l2_inputs(
-        derived_root=derived_root, collector="tokyo01", utc_date="2026-08-10"
-    )
-    assert not (derived_root / "l2-inputs/collector=tokyo01/date=2026-08-10").exists()
 
 
 def test_l2_reconstruction_opens_only_the_partitioned_symbol_file(

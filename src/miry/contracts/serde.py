@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
-from typing import Any
 
 import orjson
 from pydantic import BaseModel
 
 
-def canonical_json_bytes(value: BaseModel | dict[str, Any]) -> bytes:
+def canonical_json_bytes(value: object) -> bytes:
     data = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
     return orjson.dumps(data, option=orjson.OPT_SORT_KEYS | orjson.OPT_APPEND_NEWLINE)
 

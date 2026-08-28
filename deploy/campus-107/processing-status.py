@@ -48,7 +48,7 @@ def main() -> None:
         )
         inputs = (
             args.base
-            / "data/derived/l2-inputs"
+            / "data/derived/l2-symbol-projections"
             / f"collector={args.collector}"
             / f"date={utc_date}"
         )
@@ -73,10 +73,10 @@ def main() -> None:
         normalized = "done" if (typed / "_NORMALIZED.json").is_file() else job_stage(
             active, "miry-norm-"
         )
-        if (inputs / "_L2_INPUTS.json").is_file():
+        if (inputs / "_L2_SYMBOL_PROJECTION.json").is_file():
             input_state = "done"
         elif final in {"processed", "rejected"}:
-            input_state = "cleaned"
+            input_state = "missing"
         else:
             input_state = job_stage(active, "miry-inputs-")
         print(

@@ -195,15 +195,44 @@ normalize (4 parse workers + 1 ordered reducer / 24GiB)
 ```
 
 partition 按共享 `miry.market-data/l2-symbol-projection/v1` schema 为每个 symbol 生成一个带逐文件
-SHA-256 的持久 Parquet，并按行数从大到小生成 array
-schedule，使重币先运行、减少尾部等待。每个 L2 task 只打开自己的一个输入文件；finalize 不删除
-该 projection，供下游研究直接按 symbol 裁剪，避免再次扫描整日 typed partition。检查进度：
+SHA-256 的 bounded-regenerable Parquet，并按行数从大到小生成 array schedule，使重币先运行、减少
+尾部等待。它不是 canonical replay，仍包含 duplicate、未 bridge diff 与 gap 内行；消费者必须重做
+相应规则。每个 L2 task 只打开自己的一个输入文件；projection 至少保留 7 日，finalize 不删除。
+检查进度：
 
 ```bash
 squeue -u pb24000367
 /home/scc/pb24000367/Projects/bn/runtime/deploy/campus-107/processing-status.py
 find /home/scc/pb24000367/Projects/bn/runtime/status/processing/submissions \
   -maxdepth 2 -type f -print
+```
+
+滚动升级前除等待 pull/rsync 退出外，还必须等待所有 `miry-norm`/`miry-normalize`、
+`miry-inputs`/`miry-l2-inputs`、`miry-l2` 和 `miry-finalize` Slurm job 清空；安装器会
+fail closed。历史日 backfill 使用对应 release 镜像逐日提交 `slurm/l2-inputs.sbatch`，输出到独立
+`l2-symbol-projections` family，不修改 typed/raw。v0.5.9 marker 尚无 typed identity，因此显式设置
+legacy backfill；它只在首次为 typed 文件补 sidecar 时多做一次 SHA-256 全读，之后复用 sidecar：
+
+```bash
+for d in 2026-08-11 2026-08-12 2026-08-13; do
+  MIRY_PROCESSING_DATE="$d" MIRY_L2_LEGACY_BACKFILL=1 \
+    sbatch --export=ALL "$R/deploy/campus-107/slurm/l2-inputs.sbatch"
+done
+```
+
+projection 不按 finalize 生命周期删除。站点必须先用 `du -sb` 选择并记录
+`MIRY_L2_PROJECTION_MAX_BYTES`；保留命令只从最老日期开始删，永远保留至少 7 日，并在预算无法
+满足而又不能突破 7 日窗口时 fail closed。默认是 dry-run，只有 pipeline 全部清空、normalized/typed
+仍能重建且 marker、Parquet schema、size、SHA-256 全部重验后，显式 `--delete` 才删除：
+
+```bash
+set -a; . "$R/deploy/campus-107/processing.env"; set +a
+"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" \
+  python "$R/deploy/campus-107/prune-l2-projections.py" \
+  --derived-root "$MIRY_DERIVED_ROOT" --collector "$MIRY_COLLECTOR" \
+  --minimum-days "$MIRY_L2_PROJECTION_RETENTION_DAYS" \
+  --max-bytes "$MIRY_L2_PROJECTION_MAX_BYTES"
+# 审核 JSON 计划并确认 squeue 中无 pipeline job 后，重复命令并追加 --delete。
 ```
 
 必须从 formal start 日开始逐日处理。`next-date` 是 O(1) 调度游标；`date=...submitting` 表示提交在

@@ -14,59 +14,21 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from miry.contracts.typed import (
+from miry.contracts.l2_projection import (
+    L2_PROJECTION_COLUMNS,
     L2_SYMBOL_PROJECTION_SCHEMA_HASH,
     L2_SYMBOL_PROJECTION_SCHEMA_ID,
+    content_hash,
+    source_file_identity,
+    validate_marker,
+    validate_shard,
+    validate_source_file_identities,
 )
+from miry.contracts.serde import sha256_file
 
-L2_COLUMNS = (
-    "exchange_symbol",
-    "stream_type",
-    "connection_id",
-    "receive_seq",
-    "app_receive_realtime_ns",
-    "app_receive_monotonic_ns",
-    "exchange_event_time_ms",
-    "exchange_transaction_time_ms",
-    "payload_hash",
-    "is_duplicate",
-    "first_update_id",
-    "final_update_id",
-    "previous_final_update_id",
-    "last_update_id",
-    "bids",
-    "asks",
-)
+L2_COLUMNS = ("exchange_symbol", *L2_PROJECTION_COLUMNS)
 PARTITION_COLUMNS = L2_COLUMNS[1:]
 DEPTH_STREAMS = pa.array(("depth", "depth_snapshot"))
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def content_hash(value: object) -> str:
-    payload = json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
-
-
-def source_file_identity(path: Path, *, collector: str, utc_date: str) -> dict[str, object]:
-    payload = {
-        "uri": f"derived/typed/collector={collector}/date={utc_date}/{path.name}",
-        "size_bytes": path.stat().st_size,
-        "content_hash": "sha256:" + sha256_file(path),
-    }
-    return {**payload, "identity_hash": content_hash(payload)}
 
 
 def main() -> None:
@@ -76,12 +38,18 @@ def main() -> None:
     parser.add_argument("--derived-root", type=Path, required=True)
     parser.add_argument("--collector", required=True)
     parser.add_argument("--date", required=True)
+    parser.add_argument(
+        "--bootstrap-legacy-identities",
+        action="store_true",
+        help="one-time v0.5.9 backfill: hash typed files into an immutable sidecar",
+    )
     args = parser.parse_args()
     pa.set_cpu_count(int(os.environ.get("SLURM_CPUS_PER_TASK", "1")))
     marker = build_l2_inputs(
         derived_root=args.derived_root,
         collector=args.collector,
         utc_date=args.date,
+        bootstrap_legacy_identities=args.bootstrap_legacy_identities,
     )
     print(
         f"L2 inputs complete date={args.date} rows={marker['total_rows']} "
@@ -89,7 +57,13 @@ def main() -> None:
     )
 
 
-def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dict[str, Any]:
+def build_l2_inputs(
+    *,
+    derived_root: Path,
+    collector: str,
+    utc_date: str,
+    bootstrap_legacy_identities: bool = False,
+) -> dict[str, Any]:
     typed_root = derived_root / "typed" / f"collector={collector}" / f"date={utc_date}"
     normalized_path = typed_root / "_NORMALIZED.json"
     normalized_bytes = normalized_path.read_bytes()
@@ -106,14 +80,44 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
         raise ValueError(
             f"normalized marker has no authoritative 60-symbol universe: {normalized_path}"
         )
-
-    output_root = derived_root / "l2-inputs" / f"collector={collector}" / f"date={utc_date}"
     source_hash = hashlib.sha256(normalized_bytes).hexdigest()
+    typed_source_files = load_typed_source_files(
+        typed_root=typed_root,
+        normalized=normalized,
+        normalized_sha256=source_hash,
+        collector=collector,
+        utc_date=utc_date,
+        bootstrap_legacy_identities=bootstrap_legacy_identities,
+    )
+    data_root = derived_root.parent
+    typed_paths = tuple(data_root / str(item["uri"]) for item in typed_source_files)
+    if (
+        tuple(sorted(typed_root.glob("*.typed.parquet"))) != typed_paths
+        or any(
+            not path.is_file() or path.stat().st_size != int(item["size_bytes"])
+            for path, item in zip(typed_paths, typed_source_files, strict=True)
+        )
+    ):
+        raise ValueError("normalized typed source inventory does not match actual files")
+
+    output_root = (
+        derived_root
+        / "l2-symbol-projections"
+        / f"collector={collector}"
+        / f"date={utc_date}"
+    )
     existing = load_marker(output_root)
     if existing is not None:
         if existing.get("normalized_sha256") != source_hash:
             raise ValueError(f"L2 input cache source mismatch: {output_root}")
-        validate_outputs(output_root, existing, tuple(symbols))
+        validate_outputs(
+            output_root,
+            existing,
+            tuple(symbols),
+            collector_id=collector,
+            utc_date=utc_date,
+            normalized_sha256=source_hash,
+        )
         return existing
 
     output_root.parent.mkdir(parents=True, exist_ok=True)
@@ -122,11 +126,6 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
     row_counts = dict.fromkeys(symbols, 0)
     ignored_rows: dict[str, int] = {}
     try:
-        typed_paths = tuple(sorted(typed_root.glob("*.typed.parquet")))
-        typed_source_files = tuple(
-            source_file_identity(path, collector=collector, utc_date=utc_date)
-            for path in typed_paths
-        )
         for path in typed_paths:
             parquet = pq.ParquetFile(path)
             for batch in parquet.iter_batches(batch_size=100_000, columns=L2_COLUMNS):
@@ -171,7 +170,10 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             "schema_id": L2_SYMBOL_PROJECTION_SCHEMA_ID,
             "schema_hash": L2_SYMBOL_PROJECTION_SCHEMA_HASH,
             "layout": "PER_SYMBOL_L2_CAUSAL_V1",
-            "persistent_for_downstream": True,
+            "canonical_replay": False,
+            "data_role": "PERFORMANCE_PROJECTION",
+            "retention_policy": "BOUNDED_REGENERABLE",
+            "minimum_retention_days": 7,
             "collector_id": collector,
             "utc_date": utc_date,
             "normalized_sha256": source_hash,
@@ -185,7 +187,7 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             "total_bytes": sum(item["size_bytes"] for item in files.values()),
             "output_root": str(output_root),
         }
-        atomic_json(build_root / "_L2_INPUTS.json", marker)
+        atomic_json(build_root / "_L2_SYMBOL_PROJECTION.json", marker)
         fsync_tree(build_root)
         try:
             build_root.rename(output_root)
@@ -193,7 +195,14 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             existing = load_marker(output_root)
             if existing is None or existing.get("normalized_sha256") != source_hash:
                 raise
-            validate_outputs(output_root, existing, tuple(symbols))
+            validate_outputs(
+                output_root,
+                existing,
+                tuple(symbols),
+                collector_id=collector,
+                utc_date=utc_date,
+                normalized_sha256=source_hash,
+            )
             return existing
         fsync_directory(output_root.parent)
         return marker
@@ -202,6 +211,73 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             writer.close()
         if build_root.exists():
             shutil.rmtree(build_root)
+
+
+def load_typed_source_files(
+    *,
+    typed_root: Path,
+    normalized: dict[str, Any],
+    normalized_sha256: str,
+    collector: str,
+    utc_date: str,
+    bootstrap_legacy_identities: bool,
+) -> tuple[dict[str, Any], ...]:
+    if "typed_source_files" in normalized or "typed_source_file_set_hash" in normalized:
+        return validate_source_file_identities(
+            normalized.get("typed_source_files"),
+            expected_set_hash=normalized.get("typed_source_file_set_hash"),
+        )
+    sidecar_path = typed_root / "_TYPED_SOURCE_IDENTITIES.json"
+    if sidecar_path.is_file():
+        sidecar = json.loads(sidecar_path.read_bytes())
+        if (
+            set(sidecar)
+            != {
+                "schema_version",
+                "collector_id",
+                "utc_date",
+                "normalized_sha256",
+                "typed_source_files",
+                "typed_source_file_set_hash",
+            }
+            or sidecar.get("schema_version") != 1
+            or sidecar.get("collector_id") != collector
+            or sidecar.get("utc_date") != utc_date
+            or sidecar.get("normalized_sha256") != normalized_sha256
+        ):
+            raise ValueError("legacy typed source identity sidecar invalid")
+        return validate_source_file_identities(
+            sidecar.get("typed_source_files"),
+            expected_set_hash=sidecar.get("typed_source_file_set_hash"),
+        )
+    if not bootstrap_legacy_identities:
+        raise ValueError(
+            "normalized marker lacks typed source identities; "
+            "use the explicit legacy backfill workflow"
+        )
+    identities = tuple(
+        source_file_identity(
+            path,
+            uri=f"derived/typed/collector={collector}/date={utc_date}/{path.name}",
+        )
+        for path in sorted(typed_root.glob("*.typed.parquet"))
+    )
+    if not identities:
+        raise ValueError("legacy normalized day has no typed Parquet files")
+    sidecar = {
+        "schema_version": 1,
+        "collector_id": collector,
+        "utc_date": utc_date,
+        "normalized_sha256": normalized_sha256,
+        "typed_source_files": identities,
+        "typed_source_file_set_hash": content_hash(identities),
+    }
+    atomic_json(sidecar_path, sidecar)
+    fsync_directory(typed_root)
+    return validate_source_file_identities(
+        json.loads(sidecar_path.read_bytes())["typed_source_files"],
+        expected_set_hash=sidecar["typed_source_file_set_hash"],
+    )
 
 
 def group_by_symbol_preserving_order(
@@ -226,57 +302,45 @@ def group_by_symbol_preserving_order(
 
 
 def load_marker(output_root: Path) -> dict[str, Any] | None:
-    path = output_root / "_L2_INPUTS.json"
+    path = output_root / "_L2_SYMBOL_PROJECTION.json"
     return json.loads(path.read_bytes()) if path.is_file() else None
 
 
 def validate_outputs(
-    output_root: Path, marker: dict[str, Any], expected_symbols: tuple[str, ...]
+    output_root: Path,
+    marker: dict[str, Any],
+    expected_symbols: tuple[str, ...],
+    *,
+    collector_id: str,
+    utc_date: str,
+    normalized_sha256: str,
 ) -> None:
-    if (
-        marker.get("schema_version") != 3
-        or marker.get("schema_id") != L2_SYMBOL_PROJECTION_SCHEMA_ID
-        or marker.get("schema_hash") != L2_SYMBOL_PROJECTION_SCHEMA_HASH
-        or marker.get("layout") != "PER_SYMBOL_L2_CAUSAL_V1"
-        or marker.get("persistent_for_downstream") is not True
-        or tuple(marker.get("symbols") or ()) != expected_symbols
-        or not isinstance(marker.get("typed_source_files"), list)
-        or not isinstance(marker.get("typed_source_file_set_hash"), str)
-    ):
-        raise ValueError(f"L2 input cache universe mismatch: {output_root}")
-    files = marker.get("files")
-    if not isinstance(files, dict):
-        raise ValueError(f"L2 input cache has no file inventory: {output_root}")
-    typed_sources = marker.get("typed_source_files")
-    if (
-        not isinstance(typed_sources, list)
-        or content_hash(typed_sources) != marker.get("typed_source_file_set_hash")
-    ):
-        raise ValueError(f"L2 input cache typed source set mismatch: {output_root}")
+    files = validate_marker(
+        marker,
+        collector_id=collector_id,
+        utc_date=utc_date,
+        normalized_sha256=normalized_sha256,
+        expected_symbols=expected_symbols,
+    )
+    typed_sources = validate_source_file_identities(
+        marker.get("typed_source_files"),
+        expected_set_hash=marker.get("typed_source_file_set_hash"),
+    )
     data_root = output_root.parents[2].parent
     for item in typed_sources:
-        if not isinstance(item, dict):
-            raise ValueError(f"L2 input cache typed source identity invalid: {output_root}")
         identity = {key: item.get(key) for key in ("uri", "size_bytes", "content_hash")}
         path = data_root / str(identity["uri"])
         if (
-            item.get("identity_hash") != content_hash(identity)
-            or not path.is_file()
+            not path.is_file()
             or path.stat().st_size != int(identity["size_bytes"])
-            or "sha256:" + sha256_file(path) != identity["content_hash"]
         ):
             raise ValueError(f"L2 input cache typed source file mismatch: {path}")
     for symbol in expected_symbols:
         path = output_root / f"symbol={symbol}.parquet"
         item = files.get(symbol)
-        if (
-            not isinstance(item, dict)
-            or int(item.get("rows", 0)) <= 0
-            or not path.is_file()
-            or path.stat().st_size != int(item.get("size_bytes", -1))
-            or sha256_file(path) != item.get("sha256")
-        ):
-            raise ValueError(f"invalid L2 input cache file: {path}")
+        if not isinstance(item, dict) or int(item.get("rows", 0)) <= 0:
+            raise ValueError(f"invalid L2 symbol projection file record: {path}")
+        validate_shard(path, item)
 
 
 def atomic_json(path: Path, value: dict[str, Any]) -> None:

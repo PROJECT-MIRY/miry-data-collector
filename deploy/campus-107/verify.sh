@@ -37,6 +37,7 @@ set +a
 for path in \
     "$script_dir/submit-ready-day.sh" \
     "$script_dir/build-l2-inputs.py" \
+    "$script_dir/prune-l2-projections.py" \
     "$script_dir/processing-status.py" \
     "$script_dir/slurm/normalize.sbatch" \
     "$script_dir/slurm/l2-inputs.sbatch" \

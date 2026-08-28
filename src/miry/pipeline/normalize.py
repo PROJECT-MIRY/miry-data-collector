@@ -14,6 +14,7 @@ import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from miry.contracts.l2_projection import content_hash, source_file_identity
 from miry.contracts.models import (
     ChunkManifest,
     ContentType,
@@ -163,6 +164,17 @@ class DayNormalizer:
             if active_universe is None:
                 raise ValueError("formal start has no active universe decision")
             _validate_formal_start(formal_start, active_universe)
+        typed_paths = tuple(sorted(self._output_root.glob("*.typed.parquet")))
+        typed_source_files = tuple(
+            source_file_identity(
+                path,
+                uri=(
+                    f"derived/typed/collector={self._collector_id}/"
+                    f"date={self._utc_date.isoformat()}/{path.name}"
+                ),
+            )
+            for path in typed_paths
+        )
         marker = {
             "schema_version": 1,
             "collector_id": self._collector_id,
@@ -171,6 +183,8 @@ class DayNormalizer:
             "typed_events": result.typed_events,
             "duplicate_events": result.duplicate_events,
             "output_files": result.output_files,
+            "typed_source_files": typed_source_files,
+            "typed_source_file_set_hash": content_hash(typed_source_files),
             "collection_window_start_ns": collection_window_start_ns,
             "collection_window_end_ns": self._day_end_ns,
             "formal_start_realtime_ns": formal_start_ns,

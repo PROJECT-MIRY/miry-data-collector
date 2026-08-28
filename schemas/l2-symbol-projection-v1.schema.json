@@ -2,6 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:miry.market-data:l2-symbol-projection:v1",
   "title": "Miry Market Data L2 Symbol Projection v1",
+  "x-parquet-contract": {
+    "format": "Apache Parquet",
+    "compression": {"codec": "zstd", "level": 1},
+    "path_partition": {
+      "key": "exchange_symbol",
+      "pattern": "symbol={exchange_symbol}.parquet",
+      "row_column_included": false
+    },
+    "row_semantics": {
+      "data_role": "PERFORMANCE_PROJECTION",
+      "canonical_replay": false,
+      "contains_duplicate_rows": true,
+      "may_contain_unbridged_diffs": true,
+      "may_contain_gap_interval_rows": true,
+      "consumer_must_apply_duplicate_bridge_gap_rules": true
+    },
+    "ordering": [
+      "typed_source_files.uri ascending",
+      "source row order preserved within each typed file",
+      "no cross-connection canonical replay ordering is claimed"
+    ],
+    "columns": [
+      {"name": "stream_type", "arrow_type": "dictionary<int16,string>", "nullable": false, "causal_semantics": "raw typed depth or depth_snapshot stream discriminator"},
+      {"name": "connection_id", "arrow_type": "string", "nullable": false, "causal_semantics": "source connection identity"},
+      {"name": "receive_seq", "arrow_type": "int64", "nullable": false, "causal_semantics": "stable in-connection receive order"},
+      {"name": "app_receive_realtime_ns", "arrow_type": "int64", "nullable": false, "causal_semantics": "primary causal wall clock"},
+      {"name": "app_receive_monotonic_ns", "arrow_type": "int64", "nullable": false, "causal_semantics": "local monotonic receive clock"},
+      {"name": "exchange_event_time_ms", "arrow_type": "int64", "nullable": true, "causal_semantics": "exchange-declared event time when present"},
+      {"name": "exchange_transaction_time_ms", "arrow_type": "int64", "nullable": true, "causal_semantics": "exchange-declared transaction time when present"},
+      {"name": "payload_hash", "arrow_type": "fixed_size_binary[32]", "nullable": false, "causal_semantics": "stable payload identity"},
+      {"name": "is_duplicate", "arrow_type": "bool", "nullable": false, "causal_semantics": "typed dedup fact; duplicate rows remain present"},
+      {"name": "first_update_id", "arrow_type": "int64", "nullable": true, "causal_semantics": "Binance U for depth diff"},
+      {"name": "final_update_id", "arrow_type": "int64", "nullable": true, "causal_semantics": "Binance u for depth diff"},
+      {"name": "previous_final_update_id", "arrow_type": "int64", "nullable": true, "causal_semantics": "Binance pu for depth diff"},
+      {"name": "last_update_id", "arrow_type": "int64", "nullable": true, "causal_semantics": "snapshot lastUpdateId"},
+      {"name": "bids", "arrow_type": "list<struct<price:string!,quantity:string!>>", "nullable": true, "causal_semantics": "raw typed bid levels"},
+      {"name": "asks", "arrow_type": "list<struct<price:string!,quantity:string!>>", "nullable": true, "causal_semantics": "raw typed ask levels"}
+    ]
+  },
+
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,7 +49,10 @@
     "schema_id",
     "schema_hash",
     "layout",
-    "persistent_for_downstream",
+    "canonical_replay",
+    "data_role",
+    "retention_policy",
+    "minimum_retention_days",
     "collector_id",
     "utc_date",
     "normalized_sha256",
@@ -28,7 +71,10 @@
     "schema_id": {"const": "miry.market-data/l2-symbol-projection/v1"},
     "schema_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "layout": {"const": "PER_SYMBOL_L2_CAUSAL_V1"},
-    "persistent_for_downstream": {"const": true},
+    "canonical_replay": {"const": false},
+    "data_role": {"const": "PERFORMANCE_PROJECTION"},
+    "retention_policy": {"const": "BOUNDED_REGENERABLE"},
+    "minimum_retention_days": {"type": "integer", "minimum": 7},
     "collector_id": {"type": "string", "minLength": 1},
     "utc_date": {"type": "string", "format": "date"},
     "normalized_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -90,4 +136,3 @@
     }
   }
 }
-

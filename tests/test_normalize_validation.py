@@ -44,6 +44,14 @@ def test_normalizer_accepts_manifest_that_matches_raw_chunk(tmp_path: Path) -> N
 
     assert result.raw_events == 1
     assert result.typed_events == 1
+    marker = orjson.loads(
+        (
+            derived_root
+            / "typed/collector=tokyo01/date=2026-08-10/_NORMALIZED.json"
+        ).read_bytes()
+    )
+    assert len(marker["typed_source_files"]) == 1
+    assert marker["typed_source_file_set_hash"].startswith("sha256:")
 
 
 def test_normalizer_rejects_manifest_event_count_mismatch(tmp_path: Path) -> None:

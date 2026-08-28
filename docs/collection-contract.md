@@ -202,9 +202,14 @@ normalizer 从 sealed raw 的 `UNIVERSE_DECISION` 提取权威结构化版本、
 成员。调度器不接受人工 symbol 文件；L2 array 和 finalize 都从 `_NORMALIZED.json` 读取同一权威
 集合，不能靠少传 symbol 缩小验收范围。
 
-normalized typed 数据只允许在 L2 input 阶段扫描一次并按 symbol 分区；每个 L2 task 只能打开自己的
+normalize marker 持久化最终 typed file identity；L2 projection 阶段直接继承该 identity，且只允许
+一次 iter_batches 扫描并按 symbol 分区。每个 L2 task 只能打开自己的
 单一 partition。array 按 partition 行数从大到小调度并最多并发 32 个单核 task，避免重币延迟到第二批
-形成长尾。partition 是可再生缓存，terminal finalize 后必须校验并删除，不属于长期 derived 合同。
+形成长尾。projection 遵守共享 `miry.market-data/l2-symbol-projection/v1` schema，是包含 duplicate、
+未 bridge diff 与 gap 内行的性能投影，不是 canonical replay。它至少保留 7 日，之后只可在无活跃
+pipeline job、normalized source 仍可重建且 marker/shard 校验通过时由显式 retention 删除。
+站点必须配置硬字节预算；缺少预算不运行删除。retention 从最老日期开始，仅在预算超限时删除，
+若最近 7 日本身超过预算则报警并 fail closed，不缩短最小窗口。
 
 normalize 可并行执行每个独立 raw chunk 的 SHA、Parquet 解码、payload parse 与 typed 写入，但
 dedup、formal-start 和 universe reducer 必须按 sealed manifest 的原始顺序串行提交结果。

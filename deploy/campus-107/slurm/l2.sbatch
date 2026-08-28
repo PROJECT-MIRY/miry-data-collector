@@ -14,10 +14,10 @@ set -eu
 : "${MIRY_PROCESS_COMMAND:?}"
 : "${SLURM_ARRAY_TASK_ID:?}"
 
-input_root="$MIRY_DERIVED_ROOT/l2-inputs/collector=$MIRY_COLLECTOR/date=$MIRY_PROCESSING_DATE"
+input_root="$MIRY_DERIVED_ROOT/l2-symbol-projections/collector=$MIRY_COLLECTOR/date=$MIRY_PROCESSING_DATE"
 symbol=$(jq -er --argjson index "$SLURM_ARRAY_TASK_ID" \
   '.schedule | if type == "array" and length == 60 and (unique | length) == 60 then .[$index] else error("invalid L2 schedule") end' \
-  "$input_root/_L2_INPUTS.json")
+  "$input_root/_L2_SYMBOL_PROJECTION.json")
 test -s "$input_root/symbol=$symbol.parquet"
 checkpoint="$MIRY_DERIVED_ROOT/quality/collector=$MIRY_COLLECTOR/date=$MIRY_PROCESSING_DATE/symbol=$symbol/l2-checkpoint.json"
 if [ -s "$checkpoint" ]; then

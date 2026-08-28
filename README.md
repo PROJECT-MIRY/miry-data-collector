@@ -159,9 +159,10 @@ fast path。70%/50% 水位只做观测，不阻塞接收；只有 192MiB 最终�
 `ingest_overload`。部署新增目标镜像配置 preflight，必须在停止旧 collector 前通过，避免配置
 schema 不匹配造成重启循环。raw schema、gap 语义、universe、ACK 和 107 处理合同不变。
 
-v0.5.2 将 107 的三套历史处理入口收敛为一个幂等日流水线：seal ready 后自动提交 normalize、一次
-L2 partition、重币优先的 32 路单核 L2 array 和 finalize。每个 L2 task 只打开自己的 symbol
-partition；价格 Decimal 使用有界缓存，临时 partition 在 terminal finalize 后校验删除。partial
+v0.5.2 当时将 107 的三套历史处理入口收敛为一个幂等日流水线：seal ready 后自动提交 normalize、
+一次 L2 partition、重币优先的 32 路单核 L2 array 和 finalize。每个 L2 task 只打开自己的 symbol
+partition；当时的临时 partition 在 terminal finalize 后校验删除，此生命周期已由 v0.5.10 的
+bounded projection 合同取代。partial
 submission 会停止而不是自动重投。raw、质量门槛、checkpoint 与跨日依赖语义不变。
 
 v0.5.3 将 normalize 的 chunk SHA、Parquet 解码、JSON parse 和 typed 写入改为 4 个进程并行，
@@ -204,7 +205,8 @@ snapshot 按币最多重抓 5 次，仍失败才升级为 route reconnect。tran
 事故证据和历史不可恢复边界见
 [2026-08-25 L2 snapshot bridge 卡死诊断与修复合同](docs/2026-08-26-l2-snapshot-bridge-recovery.md)。
 
-v0.5.10 将 normalize 后一次扫描生成的 per-symbol L2 Parquet 从临时 array 输入升级为持久数据
+v0.5.10 将 normalize 后一次扫描生成的 per-symbol L2 Parquet 从临时 array 输入升级为有界可再生数据
 projection：生产 `miry.market-data/l2-symbol-projection/v1` schema，marker v3 绑定完整因果 envelope、
 typed source file set、逐文件 size/SHA-256、normalized marker hash 与精确 universe，finalize 不再自动
-删除。下游消费者只依赖该 schema，不依赖本仓库代码或错误类型；旧 sealed/typed 数据保持不可变。
+删除。projection 不是 canonical replay，至少保留 7 日；下游消费者只依赖该 schema，不依赖本仓库
+代码或错误类型。旧 sealed/typed 数据保持不可变，历史 projection 通过独立 backfill 生成。

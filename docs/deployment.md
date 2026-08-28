@@ -9,6 +9,11 @@ Binance -> Vultr collector -> /srv/miry-data-rsync/ready
         -> ACK -> Vultr REMOTE_GC
 ```
 
+滚动升级必须先 drain 旧 release 已提交的全部 Slurm DAG，再切换 hash-named SIF/sandbox 与 deploy
+scripts；不得让旧 finalize 调用新 builder。安装器会通过 `squeue` 对四类 pipeline job fail closed。
+107 另需根据本地 `du -sb`/配额设置 projection 硬字节预算；projection 至少保留 7 日，超限删除
+必须使用 release 自带的验证型 retention 命令，不能在 finalize 中隐式清理。
+
 ## 数据保留原则
 
 升级只替换程序、部署路径和服务名。以下状态必须原地保留：
@@ -24,7 +29,8 @@ Binance -> Vultr collector -> /srv/miry-data-rsync/ready
 ## 上线顺序
 
 1. 在 107 准备 `~/.ssh/miry-data-puller` 和经独立渠道核对的 known-hosts；
-2. 暂停 107 pull cron，等待当前 pull/rsync 退出；
+2. 暂停 107 pull 与 derived cron，等待当前 pull/rsync 退出，并用 `squeue` 等待已提交的
+   normalize、projection、L2、finalize DAG 全部清空；
 3. 安装并校验 release SIF，更新 `MIRY_*` processing 环境与 SSH 路径；
 4. 运行一次前台 pull，确认 `state=ok`、`failures=0`、`acks_pushed=acks_queued`；
 5. 在 Vultr 记录 universe、formal-start、open gap、ready、writing、ACK 和磁盘基线；

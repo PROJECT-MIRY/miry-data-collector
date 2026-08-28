@@ -246,10 +246,46 @@ def test_campus_installer_uses_hash_named_release(tmp_path: Path) -> None:
     assert (install_root / "deploy/campus-107/processing.env").is_file()
     deployed = install_root / "deploy/campus-107"
     assert os.access(deployed / "submit-ready-day.sh", os.X_OK)
+    assert os.access(deployed / "prune-l2-projections.py", os.X_OK)
     assert (deployed / "slurm/l2-inputs.sbatch").is_file()
     assert (deployed / "slurm/l2.sbatch").is_file()
     assert not (deployed / "submit-day.sh").exists()
     assert not (deployed / "submit-range.sh").exists()
+
+
+def test_campus_rolling_upgrade_requires_drained_slurm_pipeline(tmp_path: Path) -> None:
+    release = tmp_path / "downloaded.sif"
+    release.write_bytes(b"new release")
+    install_root = tmp_path / "persistent"
+    install_root.mkdir()
+    (install_root / "miry-data-collector.sif").write_bytes(b"old release")
+    fake_apptainer = tmp_path / "apptainer"
+    _write_fake_apptainer(fake_apptainer)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    squeue = fake_bin / "squeue"
+    squeue.write_text(
+        "#!/bin/sh\necho '123|miry-inputs-2026-08-28|PENDING'\n",
+        encoding="ascii",
+    )
+    squeue.chmod(0o755)
+    result = subprocess.run(
+        [str(INSTALL_CAMPUS), str(release)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIRY_APPTAINER": str(fake_apptainer),
+            "MIRY_CAMPUS_ROOT": str(install_root),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        },
+    )
+    assert result.returncode != 0
+    assert "old Slurm pipeline jobs remain" in result.stderr
+    install = INSTALL_CAMPUS.read_text(encoding="utf-8")
+    assert 'flock -n 9' in install
+    assert install.index('flock -n 9') < install.index('squeue -h')
 
 
 def test_campus_cron_runs_only_locked_short_wrappers() -> None:

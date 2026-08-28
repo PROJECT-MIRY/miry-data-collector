@@ -26,7 +26,7 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.9
+## 2. 保留状态安装 v0.5.10
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换
@@ -194,9 +194,9 @@ normalize (4 parse workers + 1 ordered reducer / 24GiB)
   -> finalize (1 CPU / 2GiB)
 ```
 
-partition 为每个 symbol 生成一个临时 Parquet，并按行数从大到小生成 array schedule，使重币先运行、
-减少尾部等待。每个 L2 task 只打开自己的一个输入文件；finalize 成功或质量拒绝后会验证并删除临时
-partition cache。检查进度：
+partition 为每个 symbol 生成一个带逐文件 SHA-256 的持久 Parquet，并按行数从大到小生成 array
+schedule，使重币先运行、减少尾部等待。每个 L2 task 只打开自己的一个输入文件；finalize 不删除
+该 projection，供下游研究直接按 symbol 裁剪，避免再次扫描整日 typed partition。检查进度：
 
 ```bash
 squeue -u pb24000367

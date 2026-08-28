@@ -50,7 +50,10 @@ def test_partitioned_l2_inputs_preserve_symbol_order(tmp_path: Path) -> None:
 
     assert marker["total_rows"] == 61
     assert marker["ignored_rows"] == {"OUTUSDT": 1}
-    assert marker["schema_version"] == 2
+    assert marker["schema_version"] == 3
+    assert marker["layout"] == "PER_SYMBOL_L2_CAUSAL_V1"
+    assert marker["persistent_for_downstream"] is True
+    assert len(marker["files"][symbols[0]]["sha256"]) == 64
     assert marker["schedule"][0] == symbols[0]
     assert "exchange_symbol" not in selected[0]
     assert [row["receive_seq"] for row in selected] == [1, 100]
@@ -151,6 +154,47 @@ def test_l2_reconstruction_opens_only_the_partitioned_symbol_file(
     assert parquet_opens == 1
 
 
+def test_partitioned_l2_input_rejects_same_size_rewrite(tmp_path: Path) -> None:
+    symbols = [f"S{index:02d}USDT" for index in range(60)]
+    derived_root = tmp_path / "derived"
+    typed_root = derived_root / "typed/collector=tokyo01/date=2026-08-10"
+    typed_root.mkdir(parents=True)
+    pq.write_table(
+        pa.Table.from_pylist(
+            [_row(symbol, "depth", index + 1) for index, symbol in enumerate(symbols)]
+        ),
+        typed_root / "chunk.typed.parquet",
+    )
+    (typed_root / "_NORMALIZED.json").write_text(
+        json.dumps(
+            {
+                "collector_id": "tokyo01",
+                "utc_date": "2026-08-10",
+                "expected_symbols": symbols,
+            }
+        ),
+        encoding="ascii",
+    )
+    builder = _load_builder("build_l2_inputs_tamper")
+    builder.build_l2_inputs(
+        derived_root=derived_root, collector="tokyo01", utc_date="2026-08-10"
+    )
+    path = derived_root / "l2-inputs/collector=tokyo01/date=2026-08-10/symbol=S00USDT.parquet"
+    payload = path.read_bytes()
+    path.write_bytes(payload[:-1] + bytes((payload[-1] ^ 1,)))
+    try:
+        partitioned_l2_input(
+            derived_root=derived_root,
+            collector_id="tokyo01",
+            utc_date=date(2026, 8, 10),
+            exchange_symbol="S00USDT",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("same-size L2 shard rewrite was accepted")
+
+
 def _row(symbol: str, stream: str, sequence: int) -> dict[str, object]:
     return {
         "exchange_symbol": symbol,
@@ -158,7 +202,11 @@ def _row(symbol: str, stream: str, sequence: int) -> dict[str, object]:
         "connection_id": "connection",
         "receive_seq": sequence,
         "app_receive_realtime_ns": sequence,
+        "app_receive_monotonic_ns": sequence,
+        "exchange_event_time_ms": sequence,
+        "exchange_transaction_time_ms": sequence,
         "payload_hash": bytes([sequence % 256]),
+        "is_duplicate": False,
         "first_update_id": sequence,
         "final_update_id": sequence,
         "previous_final_update_id": sequence - 1,

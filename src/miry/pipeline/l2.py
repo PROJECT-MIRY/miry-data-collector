@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from miry.contracts.models import GapEvent, GapState, StreamType
-from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes
+from miry.contracts.serde import atomic_write_bytes, canonical_json_bytes, sha256_file
 from miry.contracts.symbols import validate_exchange_symbol
 from miry.orderbook.bridge import (
     BridgeStatus,
@@ -685,7 +685,9 @@ def partitioned_l2_input(
     item = (marker.get("files") or {}).get(exchange_symbol)
     path = cache_root / f"symbol={exchange_symbol}.parquet"
     if (
-        marker.get("schema_version") != 2
+        marker.get("schema_version") != 3
+        or marker.get("layout") != "PER_SYMBOL_L2_CAUSAL_V1"
+        or marker.get("persistent_for_downstream") is not True
         or marker.get("collector_id") != collector_id
         or marker.get("utc_date") != utc_date.isoformat()
         or marker.get("normalized_sha256") != normalized_hash
@@ -694,6 +696,7 @@ def partitioned_l2_input(
         or int(item.get("rows", 0)) <= 0
         or not path.is_file()
         or path.stat().st_size != int(item.get("size_bytes", -1))
+        or sha256_file(path) != item.get("sha256")
     ):
         raise ValueError(f"invalid L2 input cache for {utc_date}: {exchange_symbol}")
     return path

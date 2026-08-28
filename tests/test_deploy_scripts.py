@@ -359,6 +359,10 @@ def test_ready_day_scheduler_submits_one_idempotent_partitioned_pipeline(
     assert calls[2].endswith("/slurm/l2.sbatch")
     assert "--dependency=afterok:103" in calls[3]
     assert calls[3].endswith("/slurm/finalize.sbatch")
+    finalize = (PROJECT_ROOT / "deploy/campus-107/slurm/finalize.sbatch").read_text(
+        encoding="utf-8"
+    )
+    assert "--cleanup" not in finalize
 
 
 def test_ready_day_scheduler_advances_past_quality_rejection(tmp_path: Path) -> None:

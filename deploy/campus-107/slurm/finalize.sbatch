@@ -13,7 +13,6 @@ set -eu
 : "${MIRY_COLLECTOR:?}"
 : "${MIRY_PROCESSING_DATE:?}"
 : "${MIRY_PROCESS_COMMAND:?}"
-: "${MIRY_L2_INPUT_BUILDER:?}"
 
 marker="$MIRY_DERIVED_ROOT/typed/collector=$MIRY_COLLECTOR/date=$MIRY_PROCESSING_DATE/_NORMALIZED.json"
 symbols=$(jq -jer \
@@ -35,12 +34,6 @@ quality_root="$MIRY_DERIVED_ROOT/quality/collector=$MIRY_COLLECTOR/date=$MIRY_PR
 if [ "$status" -ne 0 ] && [ ! -s "$quality_root/_QUALITY_REJECTED.json" ]; then
   exit "$status"
 fi
-"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" \
-  python "$MIRY_L2_INPUT_BUILDER" \
-  --derived-root "$MIRY_DERIVED_ROOT" \
-  --collector "$MIRY_COLLECTOR" \
-  --date "$MIRY_PROCESSING_DATE" \
-  --cleanup
 if [ "$status" -ne 0 ]; then
   echo "QUALITY_REJECTED date=$MIRY_PROCESSING_DATE marker=$quality_root/_QUALITY_REJECTED.json"
 fi

@@ -20,7 +20,11 @@ L2_COLUMNS = (
     "connection_id",
     "receive_seq",
     "app_receive_realtime_ns",
+    "app_receive_monotonic_ns",
+    "exchange_event_time_ms",
+    "exchange_transaction_time_ms",
     "payload_hash",
+    "is_duplicate",
     "first_update_id",
     "final_update_id",
     "previous_final_update_id",
@@ -30,6 +34,14 @@ L2_COLUMNS = (
 )
 PARTITION_COLUMNS = L2_COLUMNS[1:]
 DEPTH_STREAMS = pa.array(("depth", "depth_snapshot"))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main() -> None:
@@ -129,11 +141,14 @@ def build_l2_inputs(*, derived_root: Path, collector: str, utc_date: str) -> dic
             symbol: {
                 "rows": row_counts[symbol],
                 "size_bytes": (build_root / f"symbol={symbol}.parquet").stat().st_size,
+                "sha256": sha256_file(build_root / f"symbol={symbol}.parquet"),
             }
             for symbol in symbols
         }
         marker = {
-            "schema_version": 2,
+            "schema_version": 3,
+            "layout": "PER_SYMBOL_L2_CAUSAL_V1",
+            "persistent_for_downstream": True,
             "collector_id": collector,
             "utc_date": utc_date,
             "normalized_sha256": source_hash,
@@ -193,7 +208,12 @@ def load_marker(output_root: Path) -> dict[str, Any] | None:
 def validate_outputs(
     output_root: Path, marker: dict[str, Any], expected_symbols: tuple[str, ...]
 ) -> None:
-    if marker.get("schema_version") != 2 or tuple(marker.get("symbols") or ()) != expected_symbols:
+    if (
+        marker.get("schema_version") != 3
+        or marker.get("layout") != "PER_SYMBOL_L2_CAUSAL_V1"
+        or marker.get("persistent_for_downstream") is not True
+        or tuple(marker.get("symbols") or ()) != expected_symbols
+    ):
         raise ValueError(f"L2 input cache universe mismatch: {output_root}")
     files = marker.get("files")
     if not isinstance(files, dict):
@@ -206,6 +226,7 @@ def validate_outputs(
             or int(item.get("rows", 0)) <= 0
             or not path.is_file()
             or path.stat().st_size != int(item.get("size_bytes", -1))
+            or sha256_file(path) != item.get("sha256")
         ):
             raise ValueError(f"invalid L2 input cache file: {path}")
 

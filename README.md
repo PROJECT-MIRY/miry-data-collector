@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.9 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.10 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -203,3 +203,8 @@ snapshot 按币最多重抓 5 次，仍失败才升级为 route reconnect。tran
 之间使用独立 `L2_REANCHOR_GAP`，不会再把小时级 unanchored 窗口隐藏在已关闭的 transport gap 后。
 事故证据和历史不可恢复边界见
 [2026-08-25 L2 snapshot bridge 卡死诊断与修复合同](docs/2026-08-26-l2-snapshot-bridge-recovery.md)。
+
+v0.5.10 将 normalize 后一次扫描生成的 per-symbol L2 Parquet 从临时 array 输入升级为持久下游
+projection：marker v3 绑定完整因果 envelope、逐文件 size/SHA-256、normalized marker hash 与精确
+universe，finalize 不再自动删除。Base Game 可直接读取目标 symbol shard；旧 sealed/typed 数据保持
+不可变，由下游内容寻址 cache 兼容，不回写历史派生物。

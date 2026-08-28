@@ -30,6 +30,7 @@ def liquidity_snapshot(
     activity_factor: int = 1,
     activity_days: int = 0,
     activity_symbols: frozenset[str] | None = None,
+    recent_count: int = 10,
 ) -> DiscoverySnapshot:
     cutoff = datetime.combine(observed_at.date(), datetime.min.time(), UTC)
     cutoff_ms = int(cutoff.timestamp() * 1000)
@@ -38,8 +39,11 @@ def liquidity_snapshot(
     kline_rows: dict[str, dict[str, object]] = {}
     depth_rows: dict[str, list[dict[str, object]]] = {}
     book_rows = []
+    if not 0 <= recent_count <= 10:
+        raise ValueError("recent_count must be between 0 and 10")
+    mature_count = 75 - recent_count
     for index, symbol in enumerate(symbols(0, 75)):
-        age_days = 100 if index < 65 else 20 - (index - 65)
+        age_days = 100 if index < mature_count else 20 - (index - mature_count)
         exchange_rows.append(
             {
                 "symbol": symbol,

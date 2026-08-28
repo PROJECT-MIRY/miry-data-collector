@@ -17,6 +17,7 @@ from miry.universe.evidence import (
     _historical_rows,
     _market_context,
     _market_rows,
+    _MarketRow,
     _mature_pool,
     _probe_pool,
     _rank_historical_rows,
@@ -36,23 +37,33 @@ def select_bootstrap_universe(
     *,
     policy: RollingPolicy,
 ) -> SelectionResult:
-    rows, _ = _market_rows(snapshot, tracked=(), policy=policy)
-    probe_pool = _probe_pool(rows, policy)
-    if len(probe_pool) < 5:
-        raise ValueError(f"only {len(probe_pool)} recent candidates have complete evidence")
-    probe = tuple(sorted(row.symbol for row in probe_pool[:5]))
-    mature_pool = [
-        row for row in _mature_pool(rows, policy) if row.symbol not in set(probe)
-    ]
+    rows, inactive = _market_rows(snapshot, tracked=(), policy=policy)
+    return _bootstrap_result(rows, inactive, snapshot, policy)
+
+
+def _bootstrap_result(
+    rows: list[_MarketRow],
+    inactive: tuple[str, ...],
+    snapshot: DiscoverySnapshot,
+    policy: RollingPolicy,
+) -> SelectionResult:
+    mature_pool = _mature_pool(rows, policy)
     if len(mature_pool) < 55:
         raise ValueError(f"only {len(mature_pool)} mature candidates have complete evidence")
     core = tuple(sorted(row.symbol for row in mature_pool[:50]))
     boundary = tuple(sorted(row.symbol for row in mature_pool[50:55]))
+    stable = set((*core, *boundary))
+    probe_pool = [row for row in _probe_pool(rows, policy) if row.symbol not in stable]
+    if len(probe_pool) < 5:
+        raise ValueError(
+            f"only {len(probe_pool)} probe candidates remain after reserving stable roles"
+        )
+    probe = tuple(sorted(row.symbol for row in probe_pool[:5]))
     return SelectionResult(
         core,
         boundary,
         probe,
-        (),
+        inactive,
         snapshot.source_hashes,
         len(mature_pool),
         len(probe_pool),
@@ -72,35 +83,31 @@ def validate_bootstrap_universe(
         tracked=tuple(sorted((*core, *boundary, *probe))),
         policy=policy,
     )
-    formal_probe_pool = _probe_pool(rows, policy)
-    probe_symbols = set(probe)
-    mature_pool = [
-        row for row in _mature_pool(rows, policy) if row.symbol not in probe_symbols
-    ]
-    mature_symbols = {row.symbol for row in mature_pool}
-    qualified_probe_symbols = {row.symbol for row in formal_probe_pool}
+    mature_symbols = {row.symbol for row in _mature_pool(rows, policy)}
+    probe_symbols = {row.symbol for row in _probe_pool(rows, policy)}
     missing_mature = sorted(set((*core, *boundary)) - mature_symbols)
-    missing_probe = sorted(probe_symbols - qualified_probe_symbols)
+    missing_probe = sorted(set(probe) - probe_symbols)
     if missing_mature or missing_probe:
         raise ValueError(
             "configured bootstrap members lack complete cross-sectional evidence: "
             f"mature={missing_mature} probe={missing_probe}"
         )
-    if len(mature_pool) < 55:
-        raise ValueError(f"only {len(mature_pool)} mature candidates have complete evidence")
-    if len(formal_probe_pool) < 5:
-        raise ValueError(
-            f"only {len(formal_probe_pool)} recent candidates have complete evidence"
+    expected = _bootstrap_result(rows, inactive, snapshot, policy)
+    configured = (tuple(sorted(core)), tuple(sorted(boundary)), tuple(sorted(probe)))
+    selected = (expected.core, expected.boundary, expected.probe)
+    if configured != selected:
+        mismatched = tuple(
+            role
+            for role, actual, wanted in zip(
+                ("core", "boundary", "probe"), configured, selected, strict=True
+            )
+            if actual != wanted
         )
-    return SelectionResult(
-        core=core,
-        boundary=boundary,
-        probe=probe,
-        inactive=inactive,
-        source_hashes=snapshot.source_hashes,
-        mature_pool_count=len(mature_pool),
-        probe_pool_count=len(formal_probe_pool),
-    )
+        raise ValueError(
+            "configured bootstrap members do not match deterministic role allocation: "
+            + ",".join(mismatched)
+        )
+    return expected
 
 
 def liquidity_validation_symbols(
@@ -265,7 +272,11 @@ def select_rolling_universe(
             changes += 1
 
     core_set = set(core)
-    probe_preferred = [row.symbol for row in probe_pool if row.symbol not in core_set]
+    probe_preferred = [
+        row.symbol
+        for row in probe_pool
+        if row.symbol not in core_set and row.symbol not in core_or_boundary
+    ]
     if len(probe_preferred) < 5:
         return _preserve_active(
             active,

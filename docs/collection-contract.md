@@ -37,17 +37,22 @@ metadata。
 候选角色每天 `00:00 UTC` 生效：
 
 - core/boundary 使用最近 14 个完整 UTC 日且上市至少 30 日；probe 优先在上市不足 30 日、至少
-  有 7 个完整日的 recent cohort 内排名，人数不足时才按上市时间从年轻的 mature 合约补足储备；
+  有 7 个完整日的 recent cohort 内排名；人数不足时才从已排除 stable Top55 的 mature 排名中补足；
 - 每个池分别对 P25 quote volume、P25 trades、10 bps 较薄侧 depth、50 bps 较薄侧 depth
   降序排名，对 21 次 bookTicker 点差的 q95 升序排名；单个极端点不进入 q95，depth snapshot
   只计算深度，不再把 3 个样本的最大点差混入排名；
 - 聚合顺序为“最差单项名次、名次总和、五项名次元组、symbol”，防止一个极强指标掩盖另一项
   极弱指标，同时保持结果确定；
-- mature 横截面 Top50 为 core，其后候选用于 boundary；recent 横截面最优者用于 probe；
+- 首次分配严格按角色优先级执行：mature Top50 为 core，mature 第 51--55 名为 boundary，然后从
+  recent 排名取 probe，不足部分只能由 mature 第 56 名以后补足；probe 不得先占用 stable Top55；
 - boundary 目标为非 core、非 probe 的 Top5，现有成员在候选相对 Top10 内可保留；
 - 正常情况下每天最多替换 2 个币，boundary 和 probe 各最多 1 个；
 - candidate 成员至少停留 48 小时；
 - 两次状态请求确认停止交易后，允许为恢复可采集性进行强制替换。
+
+滚动阶段不会把 active core/boundary 直接降级成 probe。probe fallback 排除更新后的 core 以及当前
+core/boundary，再从剩余 mature 排名补足；已有 probe 随时间进入 mature cohort 时仍按 dwell 和每日
+最多 1 个 probe 替换的既有规则平滑退出，不做全量角色洗牌。
 
 core 只在周一 `00:00 UTC` 评估：
 

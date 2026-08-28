@@ -17,6 +17,7 @@ from miry.universe.regime import MarketState
 from miry.universe.selection import (
     select_bootstrap_universe,
     select_rolling_universe,
+    validate_bootstrap_universe,
     write_formal_bundle,
 )
 
@@ -55,6 +56,33 @@ def test_bootstrap_replaces_recent_candidate_without_complete_history() -> None:
 
     assert "S069USDT" not in result.probe
     assert "S070USDT" in result.probe
+
+
+def test_bootstrap_reserves_top_mature_ranks_before_probe_fallback() -> None:
+    observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
+
+    result = select_bootstrap_universe(
+        liquidity_snapshot(observed, recent_count=2),
+        policy=RollingPolicy(),
+    )
+
+    assert result.core == symbols(0, 50)
+    assert result.boundary == symbols(50, 55)
+    assert result.probe == tuple(sorted((*symbols(55, 58), *symbols(73, 75))))
+
+
+def test_bootstrap_validation_rejects_probe_first_role_assignment() -> None:
+    observed = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)
+    snapshot = liquidity_snapshot(observed, recent_count=2)
+
+    with pytest.raises(ValueError, match="deterministic role allocation"):
+        validate_bootstrap_universe(
+            snapshot,
+            core=symbols(3, 53),
+            boundary=symbols(53, 58),
+            probe=tuple(sorted((*symbols(0, 3), *symbols(73, 75)))),
+            policy=RollingPolicy(),
+        )
 
 
 def test_low_and_volatile_activity_are_ranked_instead_of_rejected() -> None:
@@ -117,6 +145,28 @@ def test_monday_core_rotation_uses_robust_rank_and_hysteresis() -> None:
 
     assert "S000USDT" in result.core
     assert "S064USDT" not in result.core
+
+
+def test_rolling_probe_fallback_does_not_consume_stable_roles() -> None:
+    effective = datetime(2026, 8, 18, tzinfo=UTC)
+    active = _decision(
+        symbols(0, 50),
+        symbols(50, 55),
+        tuple(sorted((*symbols(60, 63), *symbols(73, 75)))),
+        effective - timedelta(days=30),
+    )
+
+    result = select_rolling_universe(
+        active,
+        liquidity_snapshot(effective - timedelta(minutes=10), recent_count=2),
+        effective_at=effective,
+        member_since={symbol: effective - timedelta(days=30) for symbol in active.members},
+        core_since={symbol: effective - timedelta(days=30) for symbol in active.core},
+        policy=RollingPolicy(),
+    )
+
+    assert set(result.probe).isdisjoint((*active.core, *active.boundary))
+    assert "S055USDT" in result.probe
 
 
 def test_boundary_hysteresis_uses_candidate_relative_top_ten() -> None:

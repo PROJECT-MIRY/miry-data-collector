@@ -28,6 +28,8 @@
 | 2026-08-24 | [08-22 之后的数据完整性与分钟策略质量规则](2026-08-24-data-integrity-and-minute-policy-assessment.md) | 评估 |
 | 2026-08-25 | [Gap 根因与 v0.5.4 稳定性修复](2026-08-25-gap-root-cause-and-v0.5.4-assessment.md) | 事故评估 |
 | 2026-08-26 | [L2 snapshot bridge 卡死与恢复](2026-08-26-l2-snapshot-bridge-recovery.md) | 事故修复 |
+| 2026-08-26 | [双 WebSocket 主动冗余](2026-08-26-dual-websocket-redundancy-assessment.md) | 架构评估 |
+| 2026-08-30 | [Public 接收过载与 typed decode 优化](2026-08-30-public-receive-overload.md) | 待发布实现 |
 
 ## 版本与事故背景
 

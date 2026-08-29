@@ -11,6 +11,7 @@ import pytest
 from miry.collector.rest import BinanceRestClient
 from miry.collector.websocket import (
     BinanceWebSocketConnection,
+    DepthUpdateIds,
     SnapshotBridgeError,
     SourceIdentity,
     decode_websocket,
@@ -676,7 +677,119 @@ def test_typed_parser_rejects_unknown_raw_stream() -> None:
         )
 
 
-def test_edge_depth_decode_reuses_parsed_sequence_fields() -> None:
+@pytest.mark.parametrize(
+    ("stream", "expected"),
+    [
+        ("btcusdt@depth@100ms", StreamType.DEPTH),
+        ("btcusdt@rpiDepth@500ms", StreamType.RPI_DEPTH),
+    ],
+)
+def test_edge_depth_decode_skips_unneeded_book_levels(
+    stream: str,
+    expected: StreamType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = orjson.dumps(
+        {
+            "stream": stream,
+            "data": {
+                "e": "depthUpdate",
+                "s": "BTCUSDT",
+                "U": 10,
+                "u": 11,
+                "pu": 9,
+                "b": [["1", "2"]],
+                "a": [["3", "4"]],
+            },
+        }
+    )
+    monkeypatch.setattr(
+        "miry.collector.websocket.orjson.loads",
+        lambda _raw: (_ for _ in ()).throw(AssertionError("fallback decoder used")),
+    )
+
+    decoded = decode_websocket(raw)
+
+    assert decoded.stream_type is expected
+    assert decoded.symbol == "BTCUSDT"
+    assert decoded.depth_update is not None
+    assert (
+        decoded.depth_update.first,
+        decoded.depth_update.previous,
+        decoded.depth_update.final,
+    ) == (10, 9, 11)
+
+
+@pytest.mark.parametrize(
+    ("stream", "data", "expected", "symbol"),
+    [
+        (
+            "btcusdt@bookTicker",
+            {"e": "bookTicker", "s": "BTCUSDT"},
+            StreamType.BOOK_TICKER,
+            "BTCUSDT",
+        ),
+        ("btcusdt@aggTrade", {"e": "aggTrade", "s": "BTCUSDT"}, StreamType.AGG_TRADE, "BTCUSDT"),
+        (
+            "btcusdt@markPrice@1s",
+            {"e": "markPriceUpdate", "s": "BTCUSDT"},
+            StreamType.MARK_PRICE,
+            "BTCUSDT",
+        ),
+        (
+            "btcusdt@forceOrder",
+            {"e": "forceOrder", "o": {"s": "BTCUSDT"}},
+            StreamType.FORCE_ORDER,
+            "BTCUSDT",
+        ),
+        (
+            "!contractInfo",
+            {"e": "contractInfo", "s": "BTCUSDT"},
+            StreamType.CONTRACT_INFO,
+            "BTCUSDT",
+        ),
+    ],
+)
+def test_combined_stream_typed_decode_avoids_fallback(
+    stream: str,
+    data: dict[str, object],
+    expected: StreamType,
+    symbol: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = orjson.dumps({"stream": stream, "data": data})
+    monkeypatch.setattr(
+        "miry.collector.websocket.orjson.loads",
+        lambda _raw: (_ for _ in ()).throw(AssertionError("fallback decoder used")),
+    )
+
+    decoded = decode_websocket(raw)
+
+    assert decoded.stream_type is expected
+    assert decoded.symbol == symbol
+
+
+def test_uncombined_depth_message_uses_compatible_fallback() -> None:
+    decoded = decode_websocket(
+        orjson.dumps(
+            {
+                "e": "depthUpdate",
+                "s": "BTCUSDT",
+                "U": "10",
+                "u": "11",
+                "pu": "9",
+                "b": [],
+                "a": [],
+            }
+        )
+    )
+
+    assert decoded.stream_type is StreamType.DEPTH
+    assert isinstance(decoded.depth_update, dict)
+    assert tuple(int(decoded.depth_update[key]) for key in ("U", "u", "pu")) == (10, 11, 9)
+
+
+def test_combined_depth_type_mismatch_uses_compatible_fallback() -> None:
     decoded = decode_websocket(
         orjson.dumps(
             {
@@ -684,9 +797,9 @@ def test_edge_depth_decode_reuses_parsed_sequence_fields() -> None:
                 "data": {
                     "e": "depthUpdate",
                     "s": "BTCUSDT",
-                    "U": 10,
-                    "u": 11,
-                    "pu": 9,
+                    "U": "10",
+                    "u": "11",
+                    "pu": "9",
                     "b": [],
                     "a": [],
                 },
@@ -694,10 +807,46 @@ def test_edge_depth_decode_reuses_parsed_sequence_fields() -> None:
         )
     )
 
-    assert decoded.stream_type is StreamType.DEPTH
-    assert decoded.symbol == "BTCUSDT"
-    assert decoded.data is not None
-    assert (decoded.data["pu"], decoded.data["u"]) == (9, 11)
+    assert isinstance(decoded.depth_update, dict)
+    assert tuple(int(decoded.depth_update[key]) for key in ("U", "u", "pu")) == (10, 11, 9)
+
+
+@pytest.mark.asyncio
+async def test_invalid_depth_ids_are_durable_before_route_failure() -> None:
+    raw = orjson.dumps(
+        {
+            "stream": "btcusdt@depth@100ms",
+            "data": {"e": "depthUpdate", "s": "BTCUSDT", "u": 11, "pu": 9},
+        }
+    )
+    websocket = SimpleNamespace(recv=lambda **_kwargs: asyncio.sleep(0, result=raw))
+    ingest = RecordingIngest()
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@depth@100ms",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=ingest,  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=asyncio.Event(),
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+    )
+
+    with pytest.raises(KeyError, match="U"):
+        await connection._receive_loop(  # type: ignore[arg-type]
+            websocket,
+            SimpleNamespace(deliver=lambda *_args: None),  # type: ignore[arg-type]
+        )
+
+    assert [event.payload_bytes for event in ingest.events] == [raw]
 
 
 def test_source_identity_assigns_sequence_without_async_scheduling() -> None:
@@ -1072,7 +1221,7 @@ async def test_snapshot_retries_until_the_buffered_diff_officially_bridges() -> 
     await connection._observe_depth_update(
         StreamType.DEPTH,
         "BTCUSDT",
-        {"U": 100, "u": 105, "pu": 99},
+        DepthUpdateIds(100, 105, 99),
         1,
         1,
     )
@@ -1107,7 +1256,7 @@ async def test_five_stale_snapshots_escalate_without_declaring_l2_ready() -> Non
     await connection._observe_depth_update(
         StreamType.DEPTH,
         "BTCUSDT",
-        {"U": 100, "u": 105, "pu": 99},
+        DepthUpdateIds(100, 105, 99),
         1,
         1,
     )

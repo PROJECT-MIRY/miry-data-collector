@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+import msgspec
 import orjson
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -31,15 +32,88 @@ class SnapshotBridgeError(OSError):
     pass
 
 
+class _LiquidationOrder(msgspec.Struct, frozen=True, gc=False):
+    symbol: str | None = msgspec.field(default=None, name="s")
+
+
+class _WebSocketData(msgspec.Struct, frozen=True, gc=False):
+    event_type: str = msgspec.field(name="e")
+    symbol: str | None = msgspec.field(default=None, name="s")
+    first_update_id: int | None = msgspec.field(default=None, name="U")
+    final_update_id: int | None = msgspec.field(default=None, name="u")
+    previous_final_update_id: int | None = msgspec.field(default=None, name="pu")
+    order: _LiquidationOrder | None = msgspec.field(default=None, name="o")
+
+
+class _CombinedWebSocket(msgspec.Struct, frozen=True, gc=False):
+    stream: str
+    data: _WebSocketData
+
+
+COMBINED_DECODER = msgspec.json.Decoder(_CombinedWebSocket)
+EVENT_STREAM_TYPES = {
+    "bookTicker": StreamType.BOOK_TICKER,
+    "aggTrade": StreamType.AGG_TRADE,
+    "trade": StreamType.TRADE,
+    "markPriceUpdate": StreamType.MARK_PRICE,
+    "forceOrder": StreamType.FORCE_ORDER,
+    "contractInfo": StreamType.CONTRACT_INFO,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class DepthUpdateIds:
+    first: int
+    final: int
+    previous: int
+
+
 @dataclass(frozen=True, slots=True)
 class DecodedWebSocket:
     stream_type: StreamType
     symbol: str | None
     message: dict[str, Any] | None
-    data: dict[str, Any] | None
+    depth_update: DepthUpdateIds | dict[str, Any] | None
 
 
 def decode_websocket(raw: bytes) -> DecodedWebSocket:
+    try:
+        combined = COMBINED_DECODER.decode(raw)
+    except msgspec.DecodeError:
+        return _decode_websocket_fallback(raw)
+    data = combined.data
+    symbol_value = (
+        data.order.symbol
+        if data.event_type == "forceOrder" and data.order
+        else data.symbol
+    )
+    symbol = symbol_value.upper() if symbol_value else None
+    if data.event_type == "depthUpdate":
+        if (
+            data.first_update_id is None
+            or data.final_update_id is None
+            or data.previous_final_update_id is None
+        ):
+            return _decode_websocket_fallback(raw)
+        stream_type = (
+            StreamType.RPI_DEPTH if "@rpidepth@" in combined.stream.lower() else StreamType.DEPTH
+        )
+        return DecodedWebSocket(
+            stream_type,
+            symbol,
+            None,
+            DepthUpdateIds(
+                data.first_update_id,
+                data.final_update_id,
+                data.previous_final_update_id,
+            ),
+        )
+    return DecodedWebSocket(
+        EVENT_STREAM_TYPES.get(data.event_type, StreamType.UNKNOWN), symbol, None, None
+    )
+
+
+def _decode_websocket_fallback(raw: bytes) -> DecodedWebSocket:
     try:
         message = orjson.loads(raw)
     except orjson.JSONDecodeError:
@@ -60,16 +134,10 @@ def decode_websocket(raw: bytes) -> DecodedWebSocket:
 
     if event_type == "depthUpdate":
         stream_type = StreamType.RPI_DEPTH if "@rpidepth@" in stream else StreamType.DEPTH
-        return DecodedWebSocket(stream_type, symbol, message, data)
-    mapping = {
-        "bookTicker": StreamType.BOOK_TICKER,
-        "aggTrade": StreamType.AGG_TRADE,
-        "trade": StreamType.TRADE,
-        "markPriceUpdate": StreamType.MARK_PRICE,
-        "forceOrder": StreamType.FORCE_ORDER,
-        "contractInfo": StreamType.CONTRACT_INFO,
-    }
-    return DecodedWebSocket(mapping.get(event_type, StreamType.UNKNOWN), symbol, message, data)
+        return DecodedWebSocket(stream_type, symbol, None, data)
+    return DecodedWebSocket(
+        EVENT_STREAM_TYPES.get(event_type, StreamType.UNKNOWN), symbol, None, None
+    )
 
 
 @dataclass(slots=True)
@@ -299,12 +367,12 @@ class BinanceWebSocketConnection:
             if (
                 decoded.stream_type in {StreamType.DEPTH, StreamType.RPI_DEPTH}
                 and decoded.symbol
-                and decoded.data is not None
+                and decoded.depth_update is not None
             ):
                 await self._observe_depth_update(
                     decoded.stream_type,
                     decoded.symbol,
-                    decoded.data,
+                    decoded.depth_update,
                     realtime_ns,
                     event.receive_seq,
                 )
@@ -515,18 +583,23 @@ class BinanceWebSocketConnection:
         self,
         stream_type: StreamType,
         symbol: str,
-        data: dict[str, Any],
+        update: DepthUpdateIds | dict[str, Any],
         received_realtime_ns: int,
         receive_seq: int,
     ) -> None:
         key = (stream_type, symbol)
         tracker = self._bridges.setdefault(key, SnapshotBridgeTracker())
+        ids = (
+            update
+            if isinstance(update, DepthUpdateIds)
+            else DepthUpdateIds(int(update["U"]), int(update["u"]), int(update["pu"]))
+        )
         result = tracker.on_diff(
             UpdateSpan(
                 receive_seq=receive_seq,
-                first_update_id=int(data["U"]),
-                final_update_id=int(data["u"]),
-                previous_final_update_id=int(data["pu"]),
+                first_update_id=ids.first,
+                final_update_id=ids.final,
+                previous_final_update_id=ids.previous,
             )
         )
         self._bridge_changed.setdefault(key, asyncio.Event()).set()

@@ -11,10 +11,17 @@ RUN apt-get update \
     && useradd --uid 10001 --gid collector --no-create-home --shell /usr/sbin/nologin collector
 
 WORKDIR /app
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install --retries 10 --timeout 300 .
+    python -m pip install --retries 10 --timeout 300 uv==0.11.9 \
+    && uv export --frozen --no-dev --no-emit-project \
+        --format requirements-txt --output-file /tmp/runtime-requirements.txt >/dev/null \
+    && python -m pip install --require-hashes --retries 10 --timeout 300 \
+        --requirement /tmp/runtime-requirements.txt \
+    && python -m pip install --no-deps --retries 10 --timeout 300 . \
+    && python -m pip uninstall --yes uv \
+    && rm -f /tmp/runtime-requirements.txt
 
 USER 10001:10001
 ENTRYPOINT ["miry-data-collect"]

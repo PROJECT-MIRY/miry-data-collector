@@ -42,6 +42,7 @@ def test_project_and_release_identity_use_miry_name() -> None:
     project = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="ascii"))
     readme = (PROJECT_ROOT / "README.md").read_text(encoding="utf-8")
     release = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(encoding="ascii")
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="ascii")
 
     assert project["project"]["name"] == "miry-data-collector"
     assert set(project["project"]["scripts"]) == {
@@ -61,6 +62,10 @@ def test_project_and_release_identity_use_miry_name() -> None:
         in (PROJECT_ROOT / "deploy/vultr/edge.env.example").read_text(encoding="ascii")
     )
     assert "miry-data-collector.sif" in release
+    assert project["build-system"]["requires"] == ["hatchling==1.28.0"]
+    assert "COPY pyproject.toml uv.lock README.md LICENSE ./" in dockerfile
+    assert "uv export --frozen --no-dev --no-emit-project" in dockerfile
+    assert "pip install --require-hashes" in dockerfile
 
 
 def test_vultr_config_is_formal_sixty_and_memory_bounded() -> None:

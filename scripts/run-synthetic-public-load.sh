@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 python_bin="$repo_root/.venv/bin/python"
-replay_script="$repo_root/scripts/replay_public_load.py"
+load_script="$repo_root/scripts/synthetic_public_load.py"
 rate_per_minute=${1:-700000}
 duration_seconds=${2:-10}
 port=${3:-18765}
@@ -26,7 +26,7 @@ if [[ ! -x "$python_bin" ]]; then
   exit 2
 fi
 
-taskset -c "$server_cpus" "$python_bin" "$replay_script" server \
+taskset -c "$server_cpus" "$python_bin" "$load_script" server \
   --rate "$rate_per_minute" \
   --duration "$duration_seconds" \
   --port "$port" >"$server_log" 2>&1 &
@@ -45,7 +45,7 @@ done
 
 if ! grep -qx 'ready' "$server_log"; then
   cat "$server_log" >&2
-  echo "replay server did not become ready" >&2
+  echo "synthetic load server did not become ready" >&2
   exit 2
 fi
 
@@ -55,7 +55,7 @@ systemd-run --user --wait --pipe \
   -p MemoryMax=768M \
   -p TasksMax=512 \
   --working-directory="$repo_root" \
-  "$python_bin" "$replay_script" client \
+  "$python_bin" "$load_script" client \
   --decoder typed \
   --rate "$rate_per_minute" \
   --duration "$duration_seconds" \

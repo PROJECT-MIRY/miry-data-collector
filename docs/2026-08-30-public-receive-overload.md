@@ -61,13 +61,15 @@ receive sequence、subscription audit、gap、snapshot bridge、writer 和 107 �
 已完整撤回。permessage-deflate + JSON 的独立基准约 241k events/s，关闭压缩会把测试语料网络字节放大
 约 25 倍，因此没有通过放宽 buffer、timeout 或关闭压缩掩盖容量问题。
 
-## 单核完整链路回放
+## 单核合成链路负载测试
 
-仓库提供 `scripts/run-public-load-replay.sh`。它在独立 CPU 上运行本地 WebSocket sender，对 client 启用
+仓库提供 `scripts/run-synthetic-public-load.sh`。它在独立 CPU 上运行本地合成 WebSocket sender，对
+client 启用
 真实 framing 与 permessage-deflate，并把 client 放入 `CPUQuota=100%`、单 CPU、`MemoryMax=768M` 的
 systemd cgroup。client 继续走四条 route、60 个 symbol、typed decode、L2 sequence tracker、traffic
 recorder、192 MiB strict queue 和真实 Parquet writer。负载比例为 50% 20 档 depth、25% bookTicker、
-25% aggTrade。
+25% aggTrade。payload 是测试工具生成的，不是 Binance 历史 payload，因此这里只验证热路径和门禁
+实现，不构成生产容量证据。
 
 2026-09-03 在 Intel Core Ultra 5 125H 上每档回放 10 秒：
 
@@ -77,26 +79,25 @@ recorder、192 MiB strict queue 和真实 Parquet writer。负载比例为 50% 2
 | 600k/min | 100.004% | 51.1% | 2.75ms | 5.73% | PASS |
 | 700k/min | 100.001% | 52.7% | 4.29ms | 5.84% | PASS |
 
-三档均为 `hard_rejections=0`、`l2_sequence_gaps=0`，client memory peak 为 86--97 MiB。额外使用
-2.8M/min 压力点做三次差分：`1c5451d` 基线平均 CPU 中位数为约 0.842 core，加入上述热路径修复后
-为约 0.796 core，下降约 5.5%；该压力点 CPU p95 超过 80%，按合同保持 FAIL，证明门禁可以判红。
+三档均为 `hard_rejections=0`、`l2_sequence_gaps=0`，client memory peak 为 86--97 MiB。结果只适用于
+该开发机和该合成 payload，不能外推到 Vultr 的 EPYC Rome，也不代表线上曾出现相同消息率。
 
 运行示例：
 
 ```bash
 uv sync --all-groups
-scripts/run-public-load-replay.sh 500000 10 18801
-scripts/run-public-load-replay.sh 600000 10 18802
-scripts/run-public-load-replay.sh 700000 10 18803
+scripts/run-synthetic-public-load.sh 500000 10 18801
+scripts/run-synthetic-public-load.sh 600000 10 18802
+scripts/run-synthetic-public-load.sh 700000 10 18803
 ```
 
 这不是 Vultr 同机型验收。开发机 CPU 明显快于线上单核 AMD EPYC Rome；不能在正式 collector 所在
-Vultr 上并行运行 replay，否则 replay 本身可能制造 gap。发布前仍需在隔离的同规格 1C1G 实例上执行
-相同矩阵，或在部署后仅用真实流量做无额外负载的观察验收。
+Vultr 上并行运行 synthetic load，否则测试本身可能制造 gap。生产容量必须在隔离的同规格 1C1G 实例
+使用真实捕获 payload 验证，或在部署后仅用真实流量做无额外负载的观察验收。
 
 ## 发布门槛
 
-候选已经在开发机受限单核环境完成 50/60/70 万 public msg/min 回放，并满足 CPU p95 小于 80%、
+候选已经在开发机受限单核环境完成 50/60/70 万 public msg/min 合成负载测试，并满足 CPU p95 小于 80%、
 event-loop lag p99 小于 100ms、queue 无 hard rejection、无性能 gap。由于 CPU 型号不同，发布状态仍为
 候选；同规格 Vultr 门禁通过前不得宣称 1C1G 生产容量已经证明。若同规格单核不通过，必须继续降低
 逐事件成本或升级到至少 2 vCPU；增加 socket 数、放宽 ping timeout 或隐藏 gap 都不能增加总计算容量。

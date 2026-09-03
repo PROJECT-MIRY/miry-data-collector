@@ -53,7 +53,7 @@ def legacy_decode(raw: bytes) -> DecodedWebSocket:
     return DecodedWebSocket(mapping.get(event_type, StreamType.UNKNOWN), symbol, message, data)
 
 
-class ReplaySource:
+class SyntheticSource:
     def __init__(self, route: int) -> None:
         self.symbols = SYMBOLS[route::4]
         self.sequence = dict.fromkeys(self.symbols, 1)
@@ -135,7 +135,7 @@ async def server_main(args: argparse.Namespace) -> None:
         request = orjson.loads(await connection.recv(decode=False))
         await connection.send(orjson.dumps({"result": None, "id": request["id"]}))
         await all_connected.wait()
-        source = ReplaySource(route)
+        source = SyntheticSource(route)
         per_second = args.rate / 60 / 4
         tick_seconds = 0.02
         carry = 0.0
@@ -188,7 +188,7 @@ def percentile(values: list[float], fraction: float) -> float:
 async def client_main(args: argparse.Namespace) -> None:
     if args.decoder == "legacy":
         websocket_module.decode_websocket = legacy_decode
-    with tempfile.TemporaryDirectory(prefix="miry-ws-replay-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="miry-synthetic-load-") as temporary:
         data_root = Path(temporary)
         queues = ByteBoundedQueues(192 * 1024**2, warn_ratio=0.70, resume_ratio=0.50)
         writers = WriterPool(

@@ -1,4 +1,8 @@
-# v0.5.10 端到端部署指南
+# v0.5.11 端到端部署指南
+
+本次 v0.5.11 可以只升级 Vultr collector。它没有引入新的 ready manifest content type，raw、gap、
+day manifest 和 ACK wire contract 与 107 v0.5.9 兼容；因此本次不登录、不停止也不更新 107。
+v0.5.10 引入的 L2 projection 处理优化只有在以后单独升级 107 SIF 后才生效，不影响现有 raw 拉取。
 
 正式链路为：
 

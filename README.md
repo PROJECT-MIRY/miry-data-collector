@@ -1,6 +1,6 @@
 # miry-data-collector
 
-Binance USD-M 正式数据采集与重建流水线。v0.5.10 持续采集 60 个合约：
+Binance USD-M 正式数据采集与重建流水线。v0.5.11 持续采集 60 个合约：
 50 core、5 boundary、5 probe。
 
 仓库、Python distribution、OCI image 和后续 release artifact 统一使用
@@ -210,3 +210,8 @@ projection：生产 `miry.market-data/l2-symbol-projection/v1` schema，marker v
 typed source file set、逐文件 size/SHA-256、normalized marker hash 与精确 universe，finalize 不再自动
 删除。projection 不是 canonical replay，至少保留 7 日；下游消费者只依赖该 schema，不依赖本仓库
 代码或错误类型。旧 sealed/typed 数据保持不可变，历史 projection 通过独立 backfill 生成。
+
+v0.5.11 保持 raw/gap/ACK wire contract 不变，修复 bootstrap role allocation，并降低 WebSocket
+typed decode、traffic accounting、queue admission 和 L2 tracker 的逐事件 CPU/分配开销。该版本可以只
+升级 Vultr collector；107 v0.5.9 puller 继续接收并 ACK，structured incident artifact 延后到两端同步
+升级时发布。

@@ -1,7 +1,10 @@
 # Vultr 正式采集部署
 
-本手册适用于 `167.179.115.243` 上的 v0.5.10 release。数据根为
+本手册适用于 `167.179.115.243` 上的 v0.5.11 release。数据根为
 `/srv/miry-data-rsync`，collector 和受限传输账户都使用 UID/GID 10001。
+
+v0.5.11 是 Vultr-only 兼容升级：不产生 structured incident content type，107 v0.5.9 puller 可以继续
+接收 raw/gap/day manifest 并回传 ACK。本次不要登录或更新 107，也不要安装 release SIF。
 
 ## 1. 前置条件
 

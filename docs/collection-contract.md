@@ -1,9 +1,9 @@
-# v0.5.10 正式采集与处理合同
+# v0.5.11 正式采集与处理合同
 
 ## 本阶段目标
 
 本版本继续现有正式实验，不重置 `formal-start`、raw、ready、ACK、gap 或 active universe。
-当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.10 上线本身不触发重选，只有新的每日
+当前 `7.0 / sequence 8` 的 50/5/5 身份保持不变；v0.5.11 上线本身不触发重选，只有新的每日
 完整证据按本合同形成有效 decision 后才发生增量轮换。
 
 Vultr 是 universe 决策者和执行者。107 仅拉取 immutable raw chunk、完成哈希校验、回传

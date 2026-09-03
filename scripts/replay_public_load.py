@@ -228,7 +228,6 @@ async def client_main(args: argparse.Namespace) -> None:
                 ingest=ingest,
                 queues=queues,
                 gaps=SimpleNamespace(),
-                incidents=SimpleNamespace(),
                 rest=SimpleNamespace(),
                 rotation_seconds=82_800,
                 overlap_seconds=15,

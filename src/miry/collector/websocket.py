@@ -197,7 +197,7 @@ class BinanceWebSocketConnection:
         updates: asyncio.Queue[SubscriptionUpdate],
         on_depth_gap: Callable[[str, str, StreamType, int, int, int], Awaitable[str]],
         on_depth_reanchored: Callable[[str, str, StreamType], Awaitable[None]],
-        on_event: Callable[[StreamType, str | None], None] | None = None,
+        on_event: Callable[[StreamType, str | None, int, int], None] | None = None,
         subscription_audit_seconds: float = 60.0,
         subscription_audit_timeout_seconds: float = 10.0,
         subscription_audit_failures_before_reconnect: int = 1,
@@ -220,7 +220,9 @@ class BinanceWebSocketConnection:
         self._updates = updates
         self._on_depth_gap = on_depth_gap
         self._on_depth_reanchored = on_depth_reanchored
-        self._on_event = on_event or (lambda _stream, _symbol: None)
+        self._on_event = on_event or (
+            lambda _stream, _symbol, _realtime_ns, _monotonic_ns: None
+        )
         self._subscription_audit_seconds = subscription_audit_seconds
         self._subscription_audit_timeout_seconds = subscription_audit_timeout_seconds
         self._subscription_audit_failures_before_reconnect = (
@@ -361,7 +363,12 @@ class BinanceWebSocketConnection:
             await self._ingest.put(event)
             if control_error is not None:
                 raise control_error
-            self._on_event(decoded.stream_type, decoded.symbol)
+            self._on_event(
+                decoded.stream_type,
+                decoded.symbol,
+                realtime_ns,
+                monotonic_ns,
+            )
             self._transport_pending.discard((decoded.stream_type, decoded.symbol or ""))
             self._maybe_mark_transport_ready()
             if (
@@ -588,7 +595,10 @@ class BinanceWebSocketConnection:
         receive_seq: int,
     ) -> None:
         key = (stream_type, symbol)
-        tracker = self._bridges.setdefault(key, SnapshotBridgeTracker())
+        tracker = self._bridges.get(key)
+        if tracker is None:
+            tracker = SnapshotBridgeTracker()
+            self._bridges[key] = tracker
         ids = (
             update
             if isinstance(update, DepthUpdateIds)
@@ -602,7 +612,11 @@ class BinanceWebSocketConnection:
                 previous_final_update_id=ids.previous,
             )
         )
-        self._bridge_changed.setdefault(key, asyncio.Event()).set()
+        changed = self._bridge_changed.get(key)
+        if changed is None:
+            changed = asyncio.Event()
+            self._bridge_changed[key] = changed
+        changed.set()
         snapshot_type = _snapshot_type_for_stream(stream_type)
         if (
             result.status is not BridgeStatus.SEQUENCE_GAP

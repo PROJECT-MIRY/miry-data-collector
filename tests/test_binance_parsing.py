@@ -18,6 +18,7 @@ from miry.collector.websocket import (
 )
 from miry.collector.ws_control import SubscriptionAuditError, SubscriptionUpdate
 from miry.contracts.models import RawEvent, StreamType
+from miry.orderbook.bridge import SnapshotBridgeTracker
 from miry.pipeline.parsing import logical_identity, parse_typed_row
 
 
@@ -304,6 +305,95 @@ class RecordingControl:
 
     def deliver(self, message: dict[str, object], _observed_at: int) -> None:
         self.messages.append(message)
+
+
+@pytest.mark.asyncio
+async def test_receive_observer_reuses_event_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop = asyncio.Event()
+    websocket = BurstWebSocket(1, stop)
+    observed: list[tuple[StreamType, str | None, int, int]] = []
+    monkeypatch.setattr("miry.collector.websocket.time.time_ns", lambda: 123)
+    monkeypatch.setattr("miry.collector.websocket.time.monotonic_ns", lambda: 456)
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@bookTicker",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=stop,
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+        on_event=lambda stream, symbol, realtime_ns, monotonic_ns: observed.append(
+            (stream, symbol, realtime_ns, monotonic_ns)
+        ),
+    )
+
+    await connection._receive_loop(  # type: ignore[arg-type]
+        websocket,
+        SimpleNamespace(deliver=lambda *_args: None),  # type: ignore[arg-type]
+    )
+
+    assert observed[-1] == (StreamType.BOOK_TICKER, "BTCUSDT", 123, 456)
+
+
+@pytest.mark.asyncio
+async def test_depth_observer_reuses_existing_tracker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = 0
+
+    class CountingTracker(SnapshotBridgeTracker):
+        def __init__(self) -> None:
+            nonlocal created
+            created += 1
+            super().__init__()
+
+    monkeypatch.setattr("miry.collector.websocket.SnapshotBridgeTracker", CountingTracker)
+    connection = BinanceWebSocketConnection(
+        url="wss://example.invalid/stream",
+        subscriptions=("btcusdt@depth@100ms",),
+        identity=SourceIdentity("tokyo01", "boot", "segment", "connection"),
+        ingest=RecordingIngest(),  # type: ignore[arg-type]
+        snapshot_requests=(),
+        rest=SimpleNamespace(),  # type: ignore[arg-type]
+        ready=asyncio.Event(),
+        stop=asyncio.Event(),
+        receive_timeout_seconds=1,
+        ping_interval_seconds=20,
+        ping_timeout_seconds=20,
+        max_queue=4,
+        max_message_bytes=2 * 1024**2,
+        updates=asyncio.Queue(),
+        on_depth_gap=lambda *args: asyncio.sleep(0, result="gap"),
+        on_depth_reanchored=lambda *args: asyncio.sleep(0),
+    )
+
+    await connection._observe_depth_update(
+        StreamType.DEPTH,
+        "BTCUSDT",
+        DepthUpdateIds(1, 1, 0),
+        1,
+        1,
+    )
+    await connection._observe_depth_update(
+        StreamType.DEPTH,
+        "BTCUSDT",
+        DepthUpdateIds(2, 2, 1),
+        2,
+        2,
+    )
+
+    assert created == 1
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time as wall_time
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
@@ -141,12 +142,39 @@ async def test_queue_warning_watermark_observes_without_blocking_admission() -> 
 @pytest.mark.asyncio
 async def test_queue_tracks_activity_per_writer_group(monkeypatch: pytest.MonkeyPatch) -> None:
     queues = ByteBoundedQueues(2_000, warn_ratio=0.7, resume_ratio=0.5)
-    monkeypatch.setattr("miry.collector.queue.time.monotonic", lambda: 100.0)
 
-    await queues.put(_event(1, b'{"depth":1}'))
+    monkeypatch.setattr("miry.collector.queue.time.monotonic", lambda: 1.0)
+
+    event = replace(
+        _event(1, b'{"depth":1}'),
+        app_receive_monotonic_ns=100_000_000_000,
+    )
+    await queues.put(event)
 
     assert queues.idle_seconds(WriterGroup.TRADES_MARKET, now=103.5) == 3.5
     assert queues.idle_seconds(WriterGroup.DEPTH, now=103.5) is None
+
+
+@pytest.mark.asyncio
+async def test_ingest_uses_nonblocking_queue_fast_path() -> None:
+    event = _event(1, b"payload")
+
+    class FastPathQueues:
+        def __init__(self) -> None:
+            self.events: list[RawEvent] = []
+
+        def put_nowait(self, value: RawEvent) -> None:
+            self.events.append(value)
+
+        async def put(self, _value: RawEvent) -> None:
+            raise AssertionError("async queue path used while ingest is accepting")
+
+    queues = FastPathQueues()
+    ingest = IngestCoordinator(queues, object())  # type: ignore[arg-type]
+
+    await ingest.put(event)
+
+    assert queues.events == [event]
 
 
 def test_spool_skips_manifest_scan_when_there_are_no_acks(tmp_path: Path) -> None:

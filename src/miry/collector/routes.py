@@ -58,7 +58,7 @@ class RouteRunner:
         rotation_offset_seconds: float = 0,
         d0_enabled: bool = False,
         on_ready: Callable[[str], None] | None = None,
-        on_message: Callable[[str, str], None] | None = None,
+        on_message: Callable[[str, str, int], None] | None = None,
         subscriptions_for: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
         liveness_timeout_seconds: float | None = None,
         liveness_stream_types: tuple[StreamType, ...] | None = None,
@@ -341,13 +341,30 @@ class RouteRunner:
                 if not future.done():
                     future.cancel()
 
-    def _mark_event(self, stream_type: StreamType, symbol: str | None) -> None:
+    def _mark_event(
+        self,
+        stream_type: StreamType,
+        symbol: str | None,
+        realtime_ns: int | None = None,
+        monotonic_ns: int | None = None,
+    ) -> None:
+        observed_realtime_ns = realtime_ns
         if symbol is not None and self._on_message is not None:
-            self._on_message(self._name, symbol)
+            if observed_realtime_ns is None:
+                observed_realtime_ns = time.time_ns()
+            self._on_message(self._name, symbol, observed_realtime_ns)
         key = (stream_type, symbol)
         if key in self._last_event:
-            self._last_event[key] = (time.monotonic(), time.time_ns())
-            self._liveness_changed.set()
+            if observed_realtime_ns is None:
+                observed_realtime_ns = time.time_ns()
+            observed_monotonic = (
+                monotonic_ns / 1_000_000_000
+                if monotonic_ns is not None
+                else time.monotonic()
+            )
+            self._last_event[key] = (observed_monotonic, observed_realtime_ns)
+            if not self._liveness_changed.is_set():
+                self._liveness_changed.set()
 
     async def _wait_for_fresh_events(
         self,

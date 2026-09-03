@@ -20,7 +20,7 @@ class IngestCoordinator:
     async def put(self, event: RawEvent) -> None:
         if not self._accepting.is_set():
             await self._accepting.wait()
-        await self._queues.put(event)
+        self._queues.put_nowait(event)
 
     async def rotate(self, *, universe_hash: str) -> None:
         async with self._rotation_lock:

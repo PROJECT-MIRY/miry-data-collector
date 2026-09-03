@@ -50,10 +50,22 @@ class PublicTrafficRecorder:
         self._block_peaks: Counter[str] = Counter()
         self._blocks = self._load()
 
-    def record(self, route: str, symbol: str) -> None:
-        minute = int(self._clock() // 60)
-        self._minute_symbols.setdefault(minute, Counter())[symbol] += 1
-        self._minute_routes.setdefault(minute, Counter())[route] += 1
+    def record(self, route: str, symbol: str, realtime_ns: int | None = None) -> None:
+        minute = (
+            realtime_ns // 60_000_000_000
+            if realtime_ns is not None
+            else int(self._clock() // 60)
+        )
+        symbol_counts = self._minute_symbols.get(minute)
+        if symbol_counts is None:
+            symbol_counts = Counter()
+            self._minute_symbols[minute] = symbol_counts
+        symbol_counts[symbol] += 1
+        route_counts = self._minute_routes.get(minute)
+        if route_counts is None:
+            route_counts = Counter()
+            self._minute_routes[minute] = route_counts
+        route_counts[route] += 1
 
     def effective_rates(self) -> dict[str, int]:
         if not self.has_complete_evidence:

@@ -100,6 +100,9 @@ class ByteBoundedQueues:
         return max(0.0, (time.monotonic() if now is None else now) - last_event)
 
     async def put(self, event: RawEvent) -> None:
+        self.put_nowait(event)
+
+    def put_nowait(self, event: RawEvent) -> None:
         reserved = event.approximate_size_bytes
         if reserved > self.max_bytes or self._used_bytes + reserved > self.max_bytes:
             self._hard_rejections += 1
@@ -108,7 +111,8 @@ class ByteBoundedQueues:
                 f"max={self.max_bytes}"
             )
         self._used_bytes += reserved
-        self._used_bytes_by_group[event.writer_group] += reserved
+        group = event.writer_group
+        self._used_bytes_by_group[group] += reserved
         self._high_water_bytes = max(self._high_water_bytes, self._used_bytes)
         self._interval_high_water_bytes = max(
             self._interval_high_water_bytes, self._used_bytes
@@ -116,8 +120,8 @@ class ByteBoundedQueues:
         if not self._above_warn and self._used_bytes >= self.warn_bytes:
             self._above_warn = True
             self._warn_crossings += 1
-        self._last_event_monotonic[event.writer_group] = time.monotonic()
-        self._queues[event.writer_group].put_nowait(QueuedEvent(event, reserved))
+        self._last_event_monotonic[group] = event.app_receive_monotonic_ns / 1_000_000_000
+        self._queues[group].put_nowait(QueuedEvent(event, reserved))
 
     async def get(self, group: WriterGroup) -> WriterItem:
         return await self._queues[group].get()

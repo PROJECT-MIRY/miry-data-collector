@@ -6,10 +6,12 @@ MAX_SYMBOL_LENGTH = 30
 
 
 def is_exchange_symbol(value: object) -> bool:
+    if not isinstance(value, str) or not 1 <= len(value) <= MAX_SYMBOL_LENGTH:
+        return False
+    if value.isascii():
+        return value == value.upper() and value.isalnum()
     return (
-        isinstance(value, str)
-        and 1 <= len(value) <= MAX_SYMBOL_LENGTH
-        and value == value.strip()
+        value == value.strip()
         and value == unicodedata.normalize("NFC", value)
         and value == value.upper()
         and value.isalnum()

@@ -20,7 +20,6 @@ from miry.collector.queue import (
 from miry.contracts.models import (
     ChunkManifest,
     ContentType,
-    RawEvent,
     WriterGroup,
 )
 from miry.contracts.raw import RAW_EVENT_SCHEMA, raw_events_to_table
@@ -98,13 +97,13 @@ class ChunkSession:
             write_statistics=True,
         )
 
-    def should_rotate_before(self, event: RawEvent, event_date: date) -> bool:
+    def should_rotate_before(self, reserved_bytes: int, event_date: date) -> bool:
         if event_date != self.utc_date:
             return True
         if self.event_count == 0:
             return False
         return (
-            self.estimated_bytes + event.approximate_size_bytes > self.limits.max_bytes
+            self.estimated_bytes + reserved_bytes > self.limits.max_bytes
             or self.event_count + 1 > self.limits.max_events
         )
 
@@ -320,7 +319,9 @@ class WriterPool:
                 event_date = datetime.fromtimestamp(
                     item.event.app_receive_realtime_ns // 1_000_000_000, tz=UTC
                 ).date()
-                if session is not None and session.should_rotate_before(item.event, event_date):
+                if session is not None and session.should_rotate_before(
+                    item.reserved_bytes, event_date
+                ):
                     await finish()
                 if session is None:
                     session = await asyncio.to_thread(

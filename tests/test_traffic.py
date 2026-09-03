@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -185,6 +186,39 @@ def test_message_rates_are_decoupled_from_current_universe() -> None:
     config = CollectorConfig.model_validate(raw)
 
     assert config.message_rates == {"BTCUSDT": 100}
+
+
+def test_record_uses_receive_timestamp_without_reading_clock(tmp_path: Path) -> None:
+    clock = FakeClock()
+    recorder = PublicTrafficRecorder(tmp_path / "state.json", {"BTCUSDT": 100}, clock=clock)
+
+    def fail_clock() -> float:
+        raise AssertionError("record read the wall clock")
+
+    recorder._clock = fail_clock
+    recorder.record("public-0", "BTCUSDT", realtime_ns=121_000_000_000)
+    recorder.finish_minute(2)
+
+    assert recorder._minute_routes == {}
+
+
+def test_record_reuses_existing_minute_counters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = 0
+
+    def counting_counter() -> Counter[str]:
+        nonlocal created
+        created += 1
+        return Counter()
+
+    monkeypatch.setattr("miry.collector.traffic.Counter", counting_counter)
+    recorder = PublicTrafficRecorder(tmp_path / "state.json", {})
+
+    recorder.record("public-0", "BTCUSDT", realtime_ns=121_000_000_000)
+    recorder.record("public-0", "ETHUSDT", realtime_ns=122_000_000_000)
+
+    assert created == 3
 
 
 def test_old_load_weight_field_is_rejected() -> None:

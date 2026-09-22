@@ -26,7 +26,15 @@ command -v crontab flock sbatch ssh
 新装时使用 release 对应的仓库目录、`miry-data-collector.sif`、对应 SHA-256 文件，以及 Vultr 已授权的
 `~/.ssh/miry-data-puller` 私钥。
 
-## 2. 保留状态安装 v0.5.11
+## 2. 保留状态安装 v0.5.13
+
+使用当前 deploy 脚本执行 Apptainer：它们显式禁用用户 site-packages 并清空 `PYTHONPATH`。
+`verify.sh` 验证 miry/PyArrow 实际来自镜像，而不是宿主 `~/.local`。
+手动执行 Python 时同样加 `--env PYTHONNOUSERSITE=1 --env PYTHONPATH=`。
+
+当前 107 直连 Vultr 出现 KEX/传输超时，已改用该账户现有的本地 SOCKS 代理；可选的
+OpenSSH 配置见 `ssh_config.example`。只匹配该 data-puller 目的端，保持主机密钥校验和原 SSH
+数据合同。不得把站点代理配置照抄到没有该代理的机器。
 
 升级时先暂停 pull cron，并等待当前 `miry-data-pull`/rsync 进程退出。永久 raw、derived、transfer
 ledger、`central.yaml` 和 rsync staging 都保留原位；安装器只增加 hash-named release、切换

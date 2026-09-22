@@ -1,8 +1,9 @@
-# v0.5.11 端到端部署指南
+# 端到端部署指南（采集 v0.5.12 / 处理 v0.5.13）
 
-本次 v0.5.11 可以只升级 Vultr collector。它没有引入新的 ready manifest content type，raw、gap、
-day manifest 和 ACK wire contract 与 107 v0.5.9 兼容；因此本次不登录、不停止也不更新 107。
-v0.5.10 引入的 L2 projection 处理优化只有在以后单独升级 107 SIF 后才生效，不影响现有 raw 拉取。
+Vultr v0.5.12 修复 liveness 取消传播；107 v0.5.13 修复 ACK 恢复、L2 日切和 projection schema，
+并隔离宿主 Python 包。raw/gap/day manifest/ACK 合同保持不变，无需删除 raw 或重置 universe。
+处理端专属更新不要求再次重启 Vultr。实测、代理配置和历史重算状态见
+[2026-09-22 恢复记录](2026-09-22-end-to-end-recovery.md)。
 
 正式链路为：
 
@@ -25,7 +26,7 @@ scripts；不得让旧 finalize 调用新 builder。安装器会通过 `squeue` 
 - Vultr `/srv/miry-data-rsync` 下的 ready、writing、ACK、transfer ledger、gap、lease、formal-start
   和 universe；
 - 107 `data/raw`、`data/derived`、`data/transfer-ledger`、runtime rsync staging 和 pull 状态；
-- 正式 `7.0 / sequence 8` 的 50 core、5 boundary、5 probe 与 `universe_hash`。
+- 升级前 active universe 的 50 core、5 boundary、5 probe、版本与 `universe_hash`。
 
 禁止 clean start，禁止因为命名变化重写 raw、manifest、ACK 或 checkpoint。旧数据中的
 `schema_version` 和 MIME 标识属于持久化合同，不是软件名称迁移目标。

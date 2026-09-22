@@ -46,8 +46,10 @@ SHA-256 和批次 ID；重启恢复可能重复写同一个确定性 `event_id`�
 日 seal 和采集启动。
 
 ready 下载可使用最多 4 条并行 rsync lane，但每个 `data_path` 在单轮中只属于一个 lane。inventory
-和全部 lane 完成前不得进入本地 ingest 或 ACK；任一 lane 失败只保留 staging/partial，不能授权
-远端 GC。ACK 上传仍是单一有序阶段。
+和全部 lane 完成前不得对本轮新下载进入本地 ingest 或 ACK；任一 lane 失败只保留
+staging/partial，不能授权这些新块的远端 GC。每轮下载前先补发旧的、已验证持久化的 ACK，
+避免新下载失败阻塞旧数据 GC；本轮完成持久化后再发新 ACK。两个 ACK 阶段不并发。
+失败状态包含 `failed_stage` 和 `recovered_acks_pushed`，不会掩盖部分已成功的闭环。
 
 当 staging 与永久 raw 位于同一文件系统时，107 在 staging 上完成 fsync 和 SHA 后以原子 rename
 提升为 raw，并 fsync 源/目标目录；跨设备时回退为复制、fsync、SHA、rename。进程若在提升后、ACK

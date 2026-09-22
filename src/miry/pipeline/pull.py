@@ -391,6 +391,12 @@ class RsyncTransport:
             f"UserKnownHostsFile={self._config.known_hosts}",
             "-o",
             f"ConnectTimeout={self._config.connect_timeout_seconds}",
+            "-o",
+            "ConnectionAttempts=1",
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
         ]
 
     def _remote(self, path: str) -> str:
@@ -558,8 +564,15 @@ def run_pull(config: PullConfig) -> int:
     status_path = config.local_staging_root.parent / "status" / "last-pull.json"
     journal.initialize()
     transport = RsyncTransport(config)
+    stage = "recover_acks"
+    recovered_acks = AckPushResult(queued=0, pushed=0, invalid=0)
     try:
+        # These receipts already refer to verified, durable local data. A new
+        # inventory/download failure must not prevent remote garbage collection.
+        recovered_acks = transport.push_acks(run_id=run_id, journal=journal)
+        stage = "download"
         transport.pull_ready()
+        stage = "verify_and_publish"
         result = Puller(
             transport.store,
             remote_ready_root=safe_remote_root(config.remote_ready_root),
@@ -581,7 +594,13 @@ def run_pull(config: PullConfig) -> int:
             for chunk in result.chunks
             if chunk.wrote_data
         )
+        stage = "push_acks"
         ack_result = transport.push_acks(run_id=run_id, journal=journal)
+        ack_result = AckPushResult(
+            queued=recovered_acks.pushed + ack_result.queued,
+            pushed=recovered_acks.pushed + ack_result.pushed,
+            invalid=ack_result.invalid,
+        )
         completed_at = datetime.now(UTC)
         failures = len(result.failures) + ack_result.invalid
         duration_seconds = round(time.monotonic() - started_monotonic, 3)
@@ -630,6 +649,8 @@ def run_pull(config: PullConfig) -> int:
             started_monotonic=started_monotonic,
             journal=journal,
             status_path=status_path,
+            stage=stage,
+            recovered_acks_pushed=recovered_acks.pushed,
         )
         raise
 
@@ -658,6 +679,8 @@ def _record_pull_failure(
     started_monotonic: float,
     journal: TransferJournal,
     status_path: Path,
+    stage: str,
+    recovered_acks_pushed: int,
 ) -> None:
     failed_at = datetime.now(UTC)
     failure_status = {
@@ -667,6 +690,8 @@ def _record_pull_failure(
         "completed_at": utc_text(failed_at),
         "duration_seconds": round(time.monotonic() - started_monotonic, 3),
         "fatal_error": repr(error)[:1000],
+        "failed_stage": stage,
+        "recovered_acks_pushed": recovered_acks_pushed,
     }
     try:
         journal.append(

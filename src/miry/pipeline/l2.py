@@ -392,6 +392,10 @@ class L2DayReconstructor:
                     book.invalidate()
                 return
 
+            # Rollover seals the day's artifact, not the underlying outage.
+            # In particular it must not create a 1 ns VALID tail/checkpoint.
+            if event.detail == "gap continues into the next UTC day":
+                return
             active_gaps.discard(event.gap_id)
             if active_gaps or last_valid_connection is None:
                 return

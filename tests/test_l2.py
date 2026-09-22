@@ -513,6 +513,41 @@ def test_liveness_gap_invalidates_from_last_proven_event_not_detection(tmp_path:
     assert validity[1]["valid_from_ns"] == start_ns + 700
 
 
+def test_gap_day_rollover_does_not_restore_validity_or_checkpoint(tmp_path: Path) -> None:
+    utc_date = date(2026, 8, 10)
+    start_ns = _midnight_ns(utc_date)
+    _write_typed_day(
+        tmp_path,
+        utc_date,
+        [
+            _typed_snapshot("a", 1, start_ns + 100, 100),
+            _typed_depth("a", 2, start_ns + 200, 100, 101, 99),
+            _typed_snapshot("a", 3, start_ns + 500, 103),
+            _typed_depth("a", 4, start_ns + 600, 103, 104, 102),
+        ],
+    )
+    _write_gap(tmp_path, utc_date, state="OPEN", observed_ns=start_ns + 300)
+    _write_gap(
+        tmp_path, utc_date, state="CLOSED", observed_ns=start_ns + 86_400 * 10**9 - 1
+    )
+    quality = tmp_path / "quality/collector=tokyo01/date=2026-08-10"
+    gap_path = quality / "transport-gaps.jsonl"
+    events = _read_json_lines(gap_path)
+    events[-1]["detail"] = "gap continues into the next UTC day"
+    gap_path.write_text("".join(json.dumps(event) + "\n" for event in events))
+
+    L2DayReconstructor(
+        derived_root=tmp_path, collector_id="tokyo01", utc_date=utc_date,
+        exchange_symbol="BTCUSDT",
+    ).run()
+
+    validity = _read_json_lines(quality / "symbol=BTCUSDT/l2-validity.jsonl")
+    assert len(validity) == 1
+    assert validity[0]["valid_to_ns"] == start_ns + 300
+    checkpoint = json.loads((quality / "symbol=BTCUSDT/l2-checkpoint.json").read_text())
+    assert checkpoint["state"] != "VALID"
+
+
 def _write_typed_day(root: Path, utc_date: date, rows: list[dict[str, object]]) -> None:
     typed_root = root / "typed" / "collector=tokyo01" / f"date={utc_date.isoformat()}"
     typed_root.mkdir(parents=True)

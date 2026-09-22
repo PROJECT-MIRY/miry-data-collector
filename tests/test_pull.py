@@ -228,6 +228,9 @@ def test_rsync_transport_pins_ssh_identity_and_host_key(
 
     assert len(calls) == 2
     assert "StrictHostKeyChecking=yes" in calls[0][4]
+    assert "ConnectionAttempts=1" in calls[0][4]
+    assert "ServerAliveInterval=15" in calls[0][4]
+    assert "ServerAliveCountMax=3" in calls[0][4]
     assert f"UserKnownHostsFile={config.known_hosts}" in calls[0][4]
     assert calls[0][-2] == "data-puller@167.179.115.243:ready/"
     assert calls[1][-1] == "data-puller@167.179.115.243:control/acks/"
@@ -440,6 +443,45 @@ def test_pull_cli_persists_failure_status_and_keeps_staged_ack(
     ).exists()
     events = _transfer_events(config.local_raw_root.parent / "transfer-ledger")
     assert any(event["event"] == "PULL_RUN_FAILED" for event in events)
+
+    status = json.loads((config.local_staging_root.parent / "status/last-pull.json").read_bytes())
+    assert status["failed_stage"] == "push_acks"
+
+
+def test_pending_durable_ack_is_uploaded_even_if_next_download_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from miry.pipeline.pull import run_pull
+
+    remote, manifest = _remote_fixture(b"valid parquet stand-in")
+    config = _pull_config(tmp_path)
+    for relative, content in remote.files.items():
+        destination = config.local_staging_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+    transport = RsyncTransport(config)
+    Puller(
+        transport.store, remote_ready_root="ready", remote_ack_root="control/acks",
+        local_raw_root=config.local_raw_root,
+    ).run()
+    uploaded = []
+    monkeypatch.setattr(RsyncTransport, "_run", lambda _self, *args: uploaded.append(args))
+
+    def fail_inventory(_self: RsyncTransport) -> None:
+        raise OSError("inventory unavailable")
+
+    monkeypatch.setattr(RsyncTransport, "pull_ready", fail_inventory)
+    with pytest.raises(OSError, match="inventory unavailable"):
+        run_pull(config)
+
+    assert uploaded, "durable ACK was starved by a later inventory failure"
+    assert not (config.local_staging_root / f"control/acks/{manifest.chunk_id}.ack.json").exists()
+    events = _transfer_events(config.local_raw_root.parent / "transfer-ledger")
+    assert any(event["event"] == "ACK_PUSHED" for event in events)
+    assert any(event["event"] == "PULL_RUN_FAILED" for event in events)
+    status = json.loads((config.local_staging_root.parent / "status/last-pull.json").read_bytes())
+    assert status["failed_stage"] == "download"
+    assert status["recovered_acks_pushed"] == 1
 
 
 def _pull_config(tmp_path: Path) -> PullConfig:

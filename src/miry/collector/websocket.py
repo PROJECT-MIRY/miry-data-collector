@@ -419,22 +419,14 @@ class BinanceWebSocketConnection:
     async def _fetch_requested_snapshots(
         self,
         requests: tuple[tuple[str, StreamType], ...],
-        completion: asyncio.Future[None],
     ) -> None:
         self._snapshot_pending.update(requests)
-        try:
-            await asyncio.gather(
-                *(
-                    self._recover_snapshot_bridge(symbol, stream_type)
-                    for symbol, stream_type in requests
-                )
+        await asyncio.gather(
+            *(
+                self._recover_snapshot_bridge(symbol, stream_type)
+                for symbol, stream_type in requests
             )
-            if not completion.done():
-                completion.set_result(None)
-        except BaseException as exc:
-            if not completion.done():
-                completion.set_exception(exc)
-            raise
+        )
 
     async def _fetch_snapshots(self) -> None:
         await asyncio.gather(

@@ -116,7 +116,7 @@ async def test_connection_cancel_does_not_kill_liveness(
         phase_reached.set()
         await asyncio.Future()
 
-    # Exercise the real snapshot completion future, including its cancellation path.
+    # Exercise the real snapshot callback, including its cancellation path.
     connection = object.__new__(BinanceWebSocketConnection)
     connection._snapshot_pending = set()
     monkeypatch.setattr(connection, "_recover_snapshot_bridge", blocked_bridge)
@@ -219,3 +219,57 @@ async def test_full_subscription_queue_has_a_deadline(monkeypatch: pytest.Monkey
         for task in (first, second):
             task.cancel()
         await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_controller_completes_update_only_after_snapshot_recovery(
+    monkeypatch: pytest.MonkeyPatch, fails: bool
+) -> None:
+    runner = make_runner(GapLedger())
+    recovering = asyncio.Event()
+    release = asyncio.Event()
+
+    async def bridge(_symbol: str, _stream: StreamType) -> None:
+        recovering.set()
+        await release.wait()
+        if fails:
+            raise OSError("snapshot recovery failed")
+
+    connection = object.__new__(BinanceWebSocketConnection)
+    connection._snapshot_pending = set()
+    monkeypatch.setattr(connection, "_recover_snapshot_bridge", bridge)
+    controller = SubscriptionController(
+        websocket=SimpleNamespace(),  # type: ignore[arg-type]
+        subscriptions=(),
+        updates=runner._updates,
+        connection_id="test-connection",
+        peer="test",
+        audit_seconds=60,
+        audit_timeout_seconds=20,
+        audit_failures_before_reconnect=3,
+        recover_snapshots=connection._fetch_requested_snapshots,
+    )
+    caller = asyncio.create_task(
+        runner._submit_update(
+            add=(), remove=(), snapshot_requests=(("BTCUSDT", StreamType.DEPTH_SNAPSHOT),)
+        )
+    )
+    worker = asyncio.create_task(controller.run_updates())
+    try:
+        await asyncio.wait_for(recovering.wait(), timeout=1)
+        assert not caller.done(), "subscription completed before snapshot recovery"
+        release.set()
+        if fails:
+            with pytest.raises(OSError, match="snapshot recovery failed"):
+                await asyncio.wait_for(caller, timeout=1)
+            with pytest.raises(OSError, match="snapshot recovery failed"):
+                await worker
+        else:
+            await asyncio.wait_for(caller, timeout=1)
+            assert not worker.done()
+    finally:
+        for task in (caller, worker):
+            task.cancel()
+        await asyncio.gather(caller, worker, return_exceptions=True)
+        controller.close()

@@ -24,7 +24,7 @@
 1. `RouteRunner.liveness_loop` 打开 scoped gap，并经 `_submit_update` 等待
    started、acknowledged、completion 三个共享 future。
 2. WebSocket 断开时，连接清理会取消 controller 的 `run_updates`。
-3. `_fail_subscription_update`，以及 snapshot recovery 的 completion 路径，会将
+3. 修复前的 `_fail_subscription_update` 和 snapshot recovery completion 路径会将
    `CancelledError` 放进共享 future，或取消对应 future。
 4. 等待方收到 `CancelledError`，即使 liveness task 本身从未被请求取消，也会退出。
 5. `asyncio.TaskGroup` 不把已取消的子任务视为普通故障。其他 source 继续采集，
@@ -49,20 +49,33 @@
 恢复或移除 stream 后，由原有协调逻辑关闭 scoped gap；没有新事件时保持 OPEN。
 独立的 `L2_REANCHOR_GAP`/`L2_SEQUENCE_GAP` 仍受 snapshot bridge 证明约束。
 
+删除旧耦合，而非保留双轨逻辑：
+
+- snapshot recovery 不再接收或修改订阅 completion future，只完成盘口恢复或抛错。
+  订阅控制器统一报告成功/失败，删除 snapshot 层重复的异常转发代码。
+- 失败处理按阶段顺序报告一次，再取消未完成的后续阶段，替代逐阶段嵌套分支。
+- liveness 定期检查和定向恢复成功后复用同一 gap 协调函数，删除重复关闭路径。
+  是否关闭仍取决于新事件或成员移除，不能仅凭订阅请求成功。
+
+不增加兼容层。保留三个阶段及其 deadline，因为队列等待、订阅 ACK、snapshot bridge
+是不同完成条件；保留等待边界的取消判别，因为连接关闭与服务主动取消不能混同。
+
 ## 回归验证
 
 [test_liveness_recovery.py](../tests/test_liveness_recovery.py) 使用实际
 `liveness_loop -> _submit_update -> SubscriptionController.run_updates`，以及实际
-WebSocket snapshot completion 代码；网络请求用本地可控对象代替。
+WebSocket snapshot recovery 代码；网络请求用本地可控对象代替。
 
 - 在锁、ACK、snapshot 三阶段取消连接，监控仍必须存活。
 - 恢复新事件、移除成员、继续静默三种结果分别验证 gap 关闭或保留。
 - 直接取消任一共享 future 必须成为可恢复失败。
 - 真正取消 liveness task 仍应及时退出，不能关闭未证明恢复的 gap。
 - 队列满且无 consumer 时必须超时，不能永久阻塞。
+- snapshot 恢复未结束不能提前报告成功；其普通异常必须传到订阅调用方。
 
 原始代码在九种连接取消组合上均失败；修复后十四项回归均通过。
-完整回归为 `236 passed`；Ruff 通过，mypy 对 60 个源码文件检查通过。
+清理耦合后增加两项 snapshot 结果回归；完整回归为 `238 passed`；Ruff 通过，
+mypy 对 60 个源码文件检查通过。
 
 ## 历史记录与部署边界
 

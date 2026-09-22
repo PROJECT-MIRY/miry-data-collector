@@ -188,24 +188,8 @@ class RouteRunner:
             await self._wait_or_stop(max(1.0, timeout / 2))
             if self._service_stop.is_set():
                 return
+            await self._close_recovered_liveness_gaps(active_gaps)
             now = time.monotonic()
-            for key, (gap_id, opened_after) in tuple(active_gaps.items()):
-                observed = self._last_event.get(key)
-                if observed is not None and observed[0] <= opened_after:
-                    continue
-                stream_type, symbol = key
-                await self._gaps.close(
-                    gap_id,
-                    GapReason.CONNECTION_LOST,
-                    exchange_symbols=(symbol,),
-                    stream_types=(stream_type,),
-                    detail=(
-                        "stream activity resumed after targeted recovery"
-                        if observed is not None
-                        else "stream removed from the active route"
-                    ),
-                )
-                del active_gaps[key]
             stale = tuple(
                 (stream_type, symbol, observed_realtime_ns)
                 for (stream_type, symbol), (
@@ -242,24 +226,11 @@ class RouteRunner:
                     return
                 refreshed_after = time.monotonic()
                 await self._wait_for_fresh_events(
-                    tuple((stream_type, symbol) for stream_type, symbol, _ in stale),
+                    stale_keys,
                     after=refreshed_after,
                     timeout_seconds=timeout,
                 )
-                for stream_type, symbol, _affected_from_ns in stale:
-                    key = (stream_type, symbol)
-                    active = active_gaps.get(key)
-                    if active is None:
-                        continue
-                    gap_id, _opened_after = active
-                    await self._gaps.close(
-                        gap_id,
-                        GapReason.CONNECTION_LOST,
-                        exchange_symbols=(symbol,),
-                        stream_types=(stream_type,),
-                        detail="targeted subscriptions and L2 snapshots refreshed",
-                    )
-                    del active_gaps[key]
+                await self._close_recovered_liveness_gaps(active_gaps)
                 failure_generation = -1
                 consecutive_refresh_failures = 0
             except (
@@ -291,6 +262,27 @@ class RouteRunner:
                 else:
                     failure_generation = -1
                     consecutive_refresh_failures = 0
+
+    async def _close_recovered_liveness_gaps(
+        self, active_gaps: dict[tuple[StreamType, str], tuple[str, float]]
+    ) -> None:
+        for key, (gap_id, opened_after) in tuple(active_gaps.items()):
+            observed = self._last_event.get(key)
+            if observed is not None and observed[0] <= opened_after:
+                continue
+            stream_type, symbol = key
+            await self._gaps.close(
+                gap_id,
+                GapReason.CONNECTION_LOST,
+                exchange_symbols=(symbol,),
+                stream_types=(stream_type,),
+                detail=(
+                    "stream activity resumed after targeted recovery"
+                    if observed is not None
+                    else "stream removed from the active route"
+                ),
+            )
+            del active_gaps[key]
 
     async def _refresh_keys(self, keys: tuple[tuple[StreamType, str], ...]) -> None:
         if self._subscriptions_for is None:

@@ -15,9 +15,7 @@ from miry.contracts.models import StreamType
 
 logger = logging.getLogger(__name__)
 
-SnapshotRecovery = Callable[
-    [tuple[tuple[str, StreamType], ...], asyncio.Future[None]], Awaitable[None]
-]
+SnapshotRecovery = Callable[[tuple[tuple[str, StreamType], ...]], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -202,8 +200,8 @@ class SubscriptionController:
         if not update.acknowledged.done():
             update.acknowledged.set_result(None)
         if update.snapshot_requests:
-            await self._recover_snapshots(update.snapshot_requests, update.completion)
-        elif not update.completion.done():
+            await self._recover_snapshots(update.snapshot_requests)
+        if not update.completion.done():
             update.completion.set_result(None)
 
     async def run_audits(self) -> None:
@@ -274,26 +272,17 @@ class SubscriptionController:
 
 
 def _fail_subscription_update(update: SubscriptionUpdate, error: BaseException) -> None:
-    if update.started.cancelled():
-        if not update.acknowledged.done():
-            update.acknowledged.cancel()
-        if not update.completion.done():
-            update.completion.cancel()
-    elif not update.started.done():
-        update.started.set_exception(error)
-        if not update.acknowledged.done():
-            update.acknowledged.cancel()
-        if not update.completion.done():
-            update.completion.cancel()
-    elif update.acknowledged.cancelled():
-        if not update.completion.done():
-            update.completion.cancel()
-    elif not update.acknowledged.done():
-        update.acknowledged.set_exception(error)
-        if not update.completion.done():
-            update.completion.cancel()
-    elif not update.completion.done():
-        update.completion.set_exception(error)
+    futures = (update.started, update.acknowledged, update.completion)
+    # Report once at the first unfinished phase; later phases cannot run.
+    for future in futures:
+        if future.cancelled():
+            break
+        if not future.done():
+            future.set_exception(error)
+            break
+    for future in futures:
+        if not future.done():
+            future.cancel()
 
 
 def _is_subscription_ack(value: dict[str, Any], expected_id: int) -> bool:

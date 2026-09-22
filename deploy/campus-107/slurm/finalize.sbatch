@@ -20,7 +20,7 @@ symbols=$(jq -jer \
   "$marker")
 
 set +e
-"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" \
+"$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" \
   "$MIRY_PROCESS_COMMAND" finalize \
   --raw-root "$MIRY_RAW_ROOT" \
   --derived-root "$MIRY_DERIVED_ROOT" \

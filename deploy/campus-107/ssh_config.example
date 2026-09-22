@@ -1,0 +1,5 @@
+# Optional site routing for 107's existing local SOCKS proxy. Include from ~/.ssh/config
+# only after testing the proxy. The image ships netcat-openbsd; SSH host keys stay pinned.
+Match host 167.179.115.243 user data-puller
+    ProxyCommand /usr/bin/nc -X 5 -x 127.0.0.1:26746 %h %p
+Match all

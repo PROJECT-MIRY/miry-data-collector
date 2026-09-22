@@ -86,8 +86,10 @@ if [ "$MIRY_NORMALIZE_WORKERS" -gt 8 ]; then
     exit 1
 fi
 
-"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-pull --help >/dev/null
-"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" miry-data-process --help >/dev/null
-"$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" rsync --version >/dev/null
+"$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" \
+    python -c 'import site, miry, pyarrow; assert not site.ENABLE_USER_SITE; assert miry.__file__.startswith("/usr/local/"); assert pyarrow.__file__.startswith("/usr/local/")'
+"$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" miry-data-pull --help >/dev/null
+"$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" miry-data-process --help >/dev/null
+"$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" rsync --version >/dev/null
 sbatch --version
 echo "campus-107 deployment checks passed"

@@ -15,6 +15,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from miry.contracts.l2_projection import (
+    L2_PROJECTION_ARROW_SCHEMA,
     L2_PROJECTION_COLUMNS,
     L2_SYMBOL_PROJECTION_SCHEMA_HASH,
     L2_SYMBOL_PROJECTION_SCHEMA_ID,
@@ -138,11 +139,14 @@ def build_l2_inputs(
                     if symbol not in row_counts:
                         ignored_rows[symbol] = ignored_rows.get(symbol, 0) + selected.num_rows
                         continue
+                    # A rewritten column can carry looser nullability metadata.
+                    # Enforce the canonical schema and reject actual nulls.
+                    selected = selected.cast(L2_PROJECTION_ARROW_SCHEMA, safe=True)
                     writer = writers.get(symbol)
                     if writer is None:
                         writer = pq.ParquetWriter(
                             build_root / f"symbol={symbol}.parquet",
-                            selected.schema,
+                            L2_PROJECTION_ARROW_SCHEMA,
                             compression="zstd",
                             compression_level=1,
                             use_dictionary=True,

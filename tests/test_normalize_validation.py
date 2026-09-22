@@ -254,6 +254,7 @@ def test_normalizer_marks_market_overlap_replay(tmp_path: Path) -> None:
         False,
         True,
     ]
+    assert not pq.read_schema(typed_path).field("is_duplicate").nullable
 
 
 def test_parallel_normalizer_matches_serial_cross_chunk_dedup(tmp_path: Path) -> None:

@@ -294,7 +294,9 @@ class DayNormalizer:
             type=pa.bool_(),
         )
         column_index = table.schema.get_field_index("is_duplicate")
-        table = table.set_column(column_index, "is_duplicate", duplicate_column)
+        table = table.set_column(
+            column_index, TYPED_EVENT_SCHEMA.field("is_duplicate"), duplicate_column
+        )
         DayNormalizer._write_typed_table(path, table)
         return len(duplicate_rows)
 

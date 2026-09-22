@@ -11,5 +11,5 @@ config=$install_root/central.yaml
 exec 9>"$install_root/pull.lock"
 "$flock" -n 9
 
-exec "$apptainer" exec --writable "$image" \
+exec "$apptainer" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$image" \
     miry-data-pull --config "$config"

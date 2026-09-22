@@ -132,19 +132,23 @@ def main() -> None:
     parser.add_argument("--derived-root", type=Path, required=True)
     parser.add_argument("--collector", required=True)
     parser.add_argument("--start", type=date.fromisoformat, required=True)
+    parser.add_argument("--origin", type=date.fromisoformat)
     parser.add_argument("--through", type=date.fromisoformat, required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
+    origin = args.origin or args.start
     if not re.fullmatch(r"[A-Za-z0-9._-]+", args.collector) or args.start > args.through:
         parser.error("invalid collector or date range")
     quality = args.derived_root / "quality" / f"collector={args.collector}"
-    first = quality / f"date={args.start}"
+    if origin > args.start:
+        parser.error("origin cannot follow the first repaired day")
+    first = quality / f"date={origin}"
     original = first / "transport-gaps.unreconciled.jsonl"
     source = original if original.exists() else first / "transport-gaps.jsonl"
     opened = candidates([json.loads(line) for line in source.read_bytes().splitlines()])
     if not opened:
         raise ValueError("no orphaned scoped liveness gaps proven on the starting day")
-    typed = args.derived_root / "typed" / f"collector={args.collector}" / f"date={args.start}"
+    typed = args.derived_root / "typed" / f"collector={args.collector}" / f"date={origin}"
     proof = find_evidence(typed, opened)
     if set(proof) != set(opened):
         raise ValueError(
@@ -154,7 +158,7 @@ def main() -> None:
         "schema_version": 1,
         "policy": "scoped-liveness-recovery-by-observed-event",
         "collector_id": args.collector,
-        "origin_date": args.start.isoformat(),
+        "origin_date": origin.isoformat(),
         "origin_gap_sha256": sha256_file(source),
         "normalized_sha256": sha256_file(typed / "_NORMALIZED.json"),
         "evidence": proof,

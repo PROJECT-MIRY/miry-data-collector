@@ -88,6 +88,30 @@ def test_partitioned_l2_inputs_preserve_symbol_order(tmp_path: Path) -> None:
     assert [row["receive_seq"] for row in selected] == [1, 100]
 
 
+def test_projection_normalizes_nullable_duplicate_field_without_changing_values(
+    tmp_path: Path,
+) -> None:
+    symbols = [f"S{index:02d}USDT" for index in range(60)]
+    root = tmp_path / "derived"
+    typed = root / "typed/collector=tokyo01/date=2026-08-10"
+    typed.mkdir(parents=True)
+    table = pa.Table.from_pylist(
+        [_row(symbol, "depth", index + 1) for index, symbol in enumerate(symbols)],
+        schema=TYPED_EVENT_SCHEMA,
+    )
+    pq.write_table(table, typed / "a.typed.parquet")
+    index = table.schema.get_field_index("is_duplicate")
+    nullable = table.set_column(index, "is_duplicate", pa.array([True] * len(symbols)))
+    pq.write_table(nullable, typed / "b.typed.parquet")
+    _write_normalized_marker(typed, symbols)
+    builder = _load_builder("build_nullable_duplicate")
+    builder.build_l2_inputs(derived_root=root, collector="tokyo01", utc_date="2026-08-10")
+    output = root / "l2-symbol-projections/collector=tokyo01/date=2026-08-10/symbol=S00USDT.parquet"
+    result = pq.read_table(output)
+    assert result.column("is_duplicate").to_pylist() == [False, True]
+    assert result.schema.field("is_duplicate").nullable is False
+
+
 def test_builder_does_not_hash_typed_files_before_partition(
     tmp_path: Path, monkeypatch
 ) -> None:

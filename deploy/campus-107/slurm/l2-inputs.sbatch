@@ -20,4 +20,4 @@ set -- \
 if [ "${MIRY_L2_LEGACY_BACKFILL:-0}" = 1 ]; then
   set -- "$@" --bootstrap-legacy-identities
 fi
-exec "$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" "$@"
+exec "$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" "$@"

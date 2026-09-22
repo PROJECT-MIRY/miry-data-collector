@@ -25,7 +25,7 @@ if [ -s "$checkpoint" ]; then
   exit 0
 fi
 
-exec "$MIRY_APPTAINER" exec --writable "$MIRY_DATA_IMAGE" \
+exec "$MIRY_APPTAINER" exec --env PYTHONNOUSERSITE=1 --env PYTHONPATH= --writable "$MIRY_DATA_IMAGE" \
   "$MIRY_PROCESS_COMMAND" l2 \
   --raw-root "$MIRY_RAW_ROOT" \
   --derived-root "$MIRY_DERIVED_ROOT" \

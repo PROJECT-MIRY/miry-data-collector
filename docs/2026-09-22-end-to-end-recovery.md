@@ -40,9 +40,30 @@ python scripts/reconcile-liveness-gaps.py \
 新 boot 等待全部 source ready，再关闭旧 open gap；这只证明当前恢复，不回填历史恢复时间。
 107 暂停相关 cron，等待 pull/Slurm 排空，备份配置，安装 hash-named sandbox 后恢复 cron。
 确认新版本、真实 pull complete、ACK apply/GC、无 hash mismatch，并区分质量拒绝与任务失败。
-SSH 连接失败最多重试 3 次，达到上限停止访问 107。
+SSH 连接失败最多重试 20 次（用户本轮更新），达到上限停止访问 107，不并发重试。
 
 网络断连根因不能仅凭 exit 255 推断。详细一手文档及取证方法见
 [传输恢复调研](2026-09-22-transfer-recovery-research.md)。
 
 部署实测结果在操作完成后追加；此节不代表已部署。
+
+## 处理端追加修复 / v0.5.13
+
+实际历史重放发现去重的 `set_column(..., "is_duplicate", ...)` 丢掉非空字段约束，导致
+不同 typed 文件出现 nullable/non-nullable 混合，projection writer 拒绝写入。
+修复直接复用 canonical field；projection 使用 canonical Arrow schema 安全转换，
+实际 null 不能伪造默认值。旧 typed 数据内容不改，不增加版本兼容层。
+
+107 宿主的 `~/.local` PyArrow 被 Apptainer 自动导入，破坏锁定依赖。所有执行入口显式
+`PYTHONNOUSERSITE=1`、清空 `PYTHONPATH`，verify 同时验证 miry/PyArrow 来自镜像 `/usr/local`。
+v0.5.13 是中央处理/部署工具修复；Vultr 保留 v0.5.12 以免再次产生无必要的采集停机。
+
+直连取证：SSH 在 KEX 阶段卡住，服务端未确认的报文不断重传；小报文路由和备用 443 端口
+均未可靠恢复批量传输，已撤销。107 无可用 IPv6 路由。现有 127.0.0.1:26746 SOCKS 路径
+两次完整目录读取成功，使用标准 OpenSSH ProxyCommand + netcat，不修改采集/ACK 合同。
+模板为 `deploy/campus-107/ssh_config.example`，只匹配该 data-puller 目的端。
+代理仍是运行依赖；不得将这项绕行措施描述为已经定位/修复校园公网设施。
+
+历史任务以 Slurm 执行 `scripts/replay-recovered-days.py`，逐日使用前一日新 checkpoint。
+9 月 22 日尚未封存，必须在该日正常处理完成后另跑 `--origin 2026-09-15 --start 2026-09-22
+--through 2026-09-22`，不能用当前时刻推断该日后续质量。

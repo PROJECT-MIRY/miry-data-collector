@@ -320,22 +320,32 @@ class RouteRunner:
         acknowledged = loop.create_future()
         completion = loop.create_future()
         try:
-            await self._updates.put(
-                SubscriptionUpdate(
-                    add=add,
-                    remove=remove,
-                    snapshot_requests=snapshot_requests,
-                    started=started,
-                    acknowledged=acknowledged,
-                    completion=completion,
-                )
-            )
             async with asyncio.timeout(180):
+                await self._updates.put(
+                    SubscriptionUpdate(
+                        add=add,
+                        remove=remove,
+                        snapshot_requests=snapshot_requests,
+                        started=started,
+                        acknowledged=acknowledged,
+                        completion=completion,
+                    )
+                )
                 await started
             async with asyncio.timeout(self._subscription_audit_timeout_seconds):
                 await acknowledged
             async with asyncio.timeout(180):
                 await completion
+        except asyncio.CancelledError as exc:
+            # A connection may cancel a shared future without cancelling this
+            # caller. Treat that as a failed update so liveness can reconcile
+            # its open gaps after reconnect; preserve actual caller shutdown.
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            raise ConnectionError(
+                f"{self._name}: subscription update interrupted by connection shutdown"
+            ) from exc
         finally:
             for future in (started, acknowledged, completion):
                 if not future.done():

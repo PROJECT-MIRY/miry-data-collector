@@ -30,6 +30,7 @@
 | 2026-08-26 | [L2 snapshot bridge 卡死与恢复](2026-08-26-l2-snapshot-bridge-recovery.md) | 事故修复 |
 | 2026-08-30 | [Public 接收过载与 typed decode 优化](2026-08-30-public-receive-overload.md) | 待发布实现 |
 | 2026-09-06 | [数据采集器开发周期复盘](2026-09-06-development-lifecycle-retrospective.md) | 开发复盘 |
+| 2026-09-22 | [Liveness 取消传播与未关闭 gap](2026-09-22-liveness-cancellation.md) | 未部署修复 |
 
 ## 版本与事故背景
 
